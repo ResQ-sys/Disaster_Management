@@ -31,7 +31,7 @@ Validate that the project produces actionable, understandable, and safe outputs.
 
 ## Scenario 4: API Fallback
 
-- Input: run without weather API key
+- Input: run when the weather service is temporarily unavailable
 - Expected:
   - mock/fallback weather data returned
   - workflow still completes

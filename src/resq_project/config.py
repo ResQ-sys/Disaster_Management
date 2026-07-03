@@ -25,9 +25,8 @@ LANDSLIDE_PDF       = DATA_DIR / "Landslide Inventory Mapping (Post Monsoon for 
 BLOCKED_ROADS_CSV   = DATA_DIR / "hp_blocked_corridors.csv"
 EMERGENCY_CONTACTS  = DATA_DIR / "hp_emergency_contacts.json"
 
-# ── API Keys (set in .env) ─────────────────────────────────────────────
-OPENAI_API_KEY       = os.getenv("OPENAI_API_KEY", "")
-OPENWEATHER_API_KEY  = os.getenv("OPENWEATHER_API_KEY", "")
+# ── Runtime Configuration ──────────────────────────────────────────────
+OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 ORS_API_KEY          = os.getenv("ORS_API_KEY", "")          # openrouteservice.org
 
 # ── Embedding Model ────────────────────────────────────────────────────
@@ -42,8 +41,8 @@ COLLECTION_CWC        = "hp_cwc_stations"
 COLLECTION_KNOWLEDGE  = "hp_disaster_knowledge"   # landslide PDF + NDMA guidelines
 
 # ── LangGraph LLM ─────────────────────────────────────────────────────
-LLM_MODEL       = "gpt-4o-mini"    # cost-efficient; swap to gpt-4o for demo
-LLM_TEMPERATURE = 0.1              # low temp = consistent, factual outputs
+LLM_MODEL       = "llama3.2:1b"
+LLM_TEMPERATURE = 0.1
 
 # ── HP Districts & Risk Tiers (from HIMCOSTE 2023 Landslide Inventory) ─
 DISTRICT_RISK = {
@@ -83,8 +82,8 @@ IMD_ALERTS = {
     "GREEN":  "Normal conditions. No immediate risk.",
 }
 
-# ── OpenWeatherMap ─────────────────────────────────────────────────────
-OWM_BASE_URL = "https://api.openweathermap.org/data/2.5"
+# ── Open-Meteo ─────────────────────────────────────────────────────────
+OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
 # ── OpenRouteService ───────────────────────────────────────────────────
 ORS_BASE_URL = "https://api.openrouteservice.org/v2"

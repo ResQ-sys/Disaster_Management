@@ -24,11 +24,11 @@ Graph Nodes (Agents):
 from typing import TypedDict, Annotated
 import operator
 import json
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
-from resq_project.config import LLM_MODEL, LLM_TEMPERATURE
+from resq_project.config import LLM_MODEL, LLM_TEMPERATURE, OLLAMA_BASE_URL
 from resq_project.tools import (
     get_weather, query_hospitals, query_shelters,
     query_cwc_stations, query_knowledge, get_route,
@@ -87,7 +87,11 @@ class DisasterState(TypedDict):
 # LLM
 # ══════════════════════════════════════════════════════════════════════
 def get_llm():
-    return ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
+    return ChatOllama(
+        model=LLM_MODEL,
+        temperature=LLM_TEMPERATURE,
+        base_url=OLLAMA_BASE_URL,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -359,7 +363,7 @@ SITUATION:
 - Disaster: {state['disaster_type']}
 - Needs: {', '.join(state.get('needs', []))}
 
-WEATHER (OpenWeatherMap):
+WEATHER (Open-Meteo):
 - {state.get('weather', {}).get('description', 'N/A')}
 - Forecast rain 24h: {state.get('weather', {}).get('forecast_rain_24h', 'N/A')} mm
 - Alert: {state.get('imd_alert_level', 'N/A')}

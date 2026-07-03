@@ -51,7 +51,7 @@ st.markdown("""
     Himachal Pradesh • Multi-hazard: Flood | Landslide | GLOF | Avalanche | Cloudburst
   </p>
   <p style='color:#94a3b8; margin:4px 0 0 0; font-size:12px;'>
-    Powered by: LangGraph • ChromaDB • Sentence-Transformers • OpenWeatherMap •
+    Powered by: LangGraph • Ollama llama3.2:1b • ChromaDB • Open-Meteo •
     Sources: HIMCOSTE 2023 | CWC | NHP Hospitals | DAY-NULM | HP Education Dept
   </p>
 </div>
@@ -117,7 +117,7 @@ with st.sidebar:
     🏠 DAY-NULM Shelters (54 cities)<br>
     🌊 CWC Stations (52 HP stations)<br>
     ⛰️ HIMCOSTE Landslide Inventory 2023<br>
-    🌧️ OpenWeatherMap (real-time)<br>
+    🌧️ Open-Meteo (no API key)<br>
     🗺️ OpenRouteService (routing)
     </small>
     """, unsafe_allow_html=True)
@@ -368,6 +368,6 @@ st.markdown("""
 <div style='text-align:center; color:#94a3b8; font-size:11px'>
 IIT Mandi AAI Himshikhar 2026 Capstone Project |
 HP Disaster Relief Resource Matching Agent |
-Data: HIMCOSTE 2023 • CWC • NHP • DAY-NULM • HP Education Dept • OpenWeatherMap
+Data: HIMCOSTE 2023 • CWC • NHP • DAY-NULM • HP Education Dept • Open-Meteo
 </div>
 """, unsafe_allow_html=True)
