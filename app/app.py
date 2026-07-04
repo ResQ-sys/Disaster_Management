@@ -22,6 +22,11 @@ st.set_page_config(
     layout="wide"
 )
 
+if "agent_state" not in st.session_state:
+    st.session_state.agent_state = None
+if "agent_error" not in st.session_state:
+    st.session_state.agent_error = None
+
 # ── Alert color map ────────────────────────────────────────────────────
 ALERT_COLORS = {
     "RED":    ("#dc2626", "🔴"),
@@ -126,7 +131,33 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════
 # MAIN PANEL — MAP + RESULTS
 # ══════════════════════════════════════════════════════════════════════
-if not run_btn:
+if run_btn:
+    if not district or not disaster_type or not needs:
+        st.session_state.agent_error = "⚠️ Please fill in District, Disaster Type, and at least one Need."
+        st.session_state.agent_state = None
+    else:
+        with st.spinner("🔄 Running disaster response pipeline... (5 LangGraph nodes)"):
+            try:
+                st.session_state.agent_state = run_agent(
+                    user_name=user_name or "Anonymous",
+                    district=district,
+                    location_desc=location_desc or f"{district}, HP",
+                    latitude=latitude,
+                    longitude=longitude,
+                    disaster_type=disaster_type,
+                    needs=needs
+                )
+                st.session_state.agent_error = None
+            except Exception as e:
+                st.session_state.agent_error = f"Agent error: {e}"
+                st.session_state.agent_state = None
+
+if st.session_state.agent_error:
+    st.error(st.session_state.agent_error)
+
+state = st.session_state.agent_state
+
+if state is None:
     # Default view: HP map
     st.markdown("### 🗺️ Himachal Pradesh — Disaster Risk Map")
 
@@ -162,31 +193,6 @@ if not run_btn:
     st.info("ℹ️ Fill in the sidebar and click **Find Relief Resources** to activate the agent.")
 
 else:
-    # ── Validate inputs ──────────────────────────────────────────────
-    if not district or not disaster_type or not needs:
-        st.error("⚠️ Please fill in District, Disaster Type, and at least one Need.")
-        st.stop()
-
-    # ── Run the agent ────────────────────────────────────────────────
-    with st.spinner("🔄 Running disaster response pipeline... (5 LangGraph nodes)"):
-        try:
-            state = run_agent(
-                user_name=user_name or "Anonymous",
-                district=district,
-                location_desc=location_desc or f"{district}, HP",
-                latitude=latitude,
-                longitude=longitude,
-                disaster_type=disaster_type,
-                needs=needs
-            )
-            success = True
-        except Exception as e:
-            st.error(f"Agent error: {e}")
-            success = False
-
-    if not success:
-        st.stop()
-
     # ══════════════════════════════════════════════════════════════════
     # RESULTS DISPLAY
     # ══════════════════════════════════════════════════════════════════

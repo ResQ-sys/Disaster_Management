@@ -12,18 +12,30 @@ load_dotenv()
 BASE_DIR       = Path(__file__).resolve().parents[2]
 PRIMARY_DATA_DIR = BASE_DIR / "data"
 FALLBACK_DATA_DIR = BASE_DIR / "source_data"
-DATA_DIR       = PRIMARY_DATA_DIR if PRIMARY_DATA_DIR.exists() else FALLBACK_DATA_DIR
 CHROMA_DIR     = BASE_DIR / "chroma_db"
 
+
+def resolve_data_file(filename: str, prefer_primary: bool = False) -> Path:
+    """Resolve a data file from data/ or source_data/ depending on where it exists."""
+    primary_path = PRIMARY_DATA_DIR / filename
+    fallback_path = FALLBACK_DATA_DIR / filename
+
+    if prefer_primary and primary_path.exists():
+        return primary_path
+    if fallback_path.exists():
+        return fallback_path
+    return primary_path
+
+
 # Source data files
-HOSPITAL_CSV        = DATA_DIR / "himachal_hospitals_289.csv"
-SCHOOL_PDF          = DATA_DIR / "SCHOOL_GOVT_MARCH_2021.pdf"
-SHELTER_PDF         = DATA_DIR / "Shelter Info.pdf"
-SHELTER_CSV         = PRIMARY_DATA_DIR / "hp_shelters.csv"   # optional converted file
-CWC_EXCEL           = DATA_DIR / "TableViewStationForecastData.xlsx"
-LANDSLIDE_PDF       = DATA_DIR / "Landslide Inventory Mapping (Post Monsoon for Himachal Pradesh) -2023.pdf"
-BLOCKED_ROADS_CSV   = DATA_DIR / "hp_blocked_corridors.csv"
-EMERGENCY_CONTACTS  = DATA_DIR / "hp_emergency_contacts.json"
+HOSPITAL_CSV        = resolve_data_file("himachal_hospitals_289.csv")
+SCHOOL_PDF          = resolve_data_file("SCHOOL_GOVT_MARCH_2021.pdf")
+SHELTER_PDF         = resolve_data_file("Shelter Info.pdf")
+SHELTER_CSV         = resolve_data_file("hp_shelters.csv", prefer_primary=True)   # optional converted file
+CWC_EXCEL           = resolve_data_file("TableViewStationForecastData.xlsx")
+LANDSLIDE_PDF       = resolve_data_file("Landslide Inventory Mapping (Post Monsoon for Himachal Pradesh) -2023.pdf")
+BLOCKED_ROADS_CSV   = resolve_data_file("hp_blocked_corridors.csv", prefer_primary=True)
+EMERGENCY_CONTACTS  = resolve_data_file("hp_emergency_contacts.json", prefer_primary=True)
 
 # ── Runtime Configuration ──────────────────────────────────────────────
 OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
