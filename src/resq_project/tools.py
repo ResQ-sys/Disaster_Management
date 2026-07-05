@@ -3,7 +3,7 @@ LangGraph Tool Functions
 All external API calls and ChromaDB queries wrapped as callable tools.
 
 Tools:
-  get_weather()           → OpenWeatherMap current + forecast
+  get_weather()           → Open-Meteo current + forecast
   query_hospitals()       → ChromaDB nearest hospitals
   query_shelters()        → ChromaDB shelters + schools
   query_cwc_stations()    → CWC river monitoring nearest to location
@@ -22,11 +22,11 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 from resq_project.config import (
-    CHROMA_DIR, EMBEDDING_MODEL, ORS_API_KEY, OPENWEATHER_API_KEY,
+    CHROMA_DIR, EMBEDDING_MODEL, ORS_API_KEY,
     COLLECTION_HOSPITALS, COLLECTION_SHELTERS, COLLECTION_SCHOOLS,
     COLLECTION_CWC, COLLECTION_KNOWLEDGE,
-    OWM_BASE_URL, ORS_BASE_URL,
-    BLOCKED_CORRIDORS
+    OPEN_METEO_BASE_URL, ORS_BASE_URL,
+    BLOCKED_CORRIDORS, DISTRICT_RISK
 )
 
 
@@ -53,45 +53,34 @@ def _get_collection(name: str):
 # ══════════════════════════════════════════════════════════════════════
 def get_weather(lat: float, lon: float, district: str = "") -> dict:
     """
-    Fetch current weather + 24h forecast from OpenWeatherMap.
+    Fetch current weather + 24h forecast from Open-Meteo.
     Returns rainfall, temp, wind, and IMD-style alert level.
-    Falls back to mock data if API key not set.
+    Does not require any API key.
     """
-    if not OPENWEATHER_API_KEY:
-        logger.warning("OpenWeatherMap API key not set. Using mock data.")
-        return _mock_weather(district)
-
     try:
-        # Current weather
-        curr_url = f"{OWM_BASE_URL}/weather"
-        curr_resp = requests.get(curr_url, params={
-            "lat": lat, "lon": lon,
-            "appid": OPENWEATHER_API_KEY,
-            "units": "metric"
-        }, timeout=10)
-        curr_resp.raise_for_status()
-        curr = curr_resp.json()
-
-        # 5-day / 3-hour forecast
-        fc_url = f"{OWM_BASE_URL}/forecast"
-        fc_resp = requests.get(fc_url, params={
-            "lat": lat, "lon": lon,
-            "appid": OPENWEATHER_API_KEY,
-            "units": "metric",
-            "cnt": 8  # next 24 hours (8 x 3h)
-        }, timeout=10)
-        fc_resp.raise_for_status()
-        fc = fc_resp.json()
-
-        # Parse rainfall
-        rainfall_1h = curr.get("rain", {}).get("1h", 0.0)
-        forecast_rain_24h = sum(
-            item.get("rain", {}).get("3h", 0.0)
-            for item in fc.get("list", [])
+        resp = requests.get(
+            OPEN_METEO_BASE_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,wind_speed_10m,weather_code",
+                "hourly": "precipitation",
+                "forecast_days": 2,
+                "timezone": "auto",
+            },
+            timeout=10,
         )
-        temp = curr["main"]["temp"]
-        wind_speed = curr["wind"]["speed"]
-        description = curr["weather"][0]["description"].capitalize()
+        resp.raise_for_status()
+        payload = resp.json()
+
+        current = payload.get("current", {})
+        hourly = payload.get("hourly", {})
+        precipitation = hourly.get("precipitation", [])
+        rainfall_1h = precipitation[0] if precipitation else 0.0
+        forecast_rain_24h = sum(float(value or 0.0) for value in precipitation[:24])
+        temp = current.get("temperature_2m", 0.0)
+        wind_speed = current.get("wind_speed_10m", 0.0)
+        description = _describe_weather_code(current.get("weather_code"))
 
         # Derive IMD-style alert
         alert_level = _derive_imd_alert(forecast_rain_24h)
@@ -105,7 +94,7 @@ def get_weather(lat: float, lon: float, district: str = "") -> dict:
             "description":       description,
             "alert_level":       alert_level["level"],
             "alert_message":     alert_level["message"],
-            "source":            "OpenWeatherMap",
+            "source":            "Open-Meteo",
         }
 
     except Exception as e:
@@ -126,7 +115,7 @@ def _derive_imd_alert(rain_24h: float) -> dict:
 
 
 def _mock_weather(district: str) -> dict:
-    """Mock weather for development/testing without API key."""
+    """Mock weather fallback when weather API is unavailable."""
     return {
         "district":          district or "Unknown",
         "temperature_c":     22.5,
@@ -135,9 +124,36 @@ def _mock_weather(district: str) -> dict:
         "forecast_rain_24h": 85.0,
         "description":       "Heavy rain (MOCK DATA)",
         "alert_level":       "YELLOW",
-        "alert_message":     "Heavy rain. Mock data — set OPENWEATHER_API_KEY for real data.",
+        "alert_message":     "Heavy rain. Mock data returned because live weather lookup failed.",
         "source":            "MOCK",
     }
+
+
+def _describe_weather_code(code: Optional[int]) -> str:
+    weather_codes = {
+        0: "Clear sky",
+        1: "Mainly clear",
+        2: "Partly cloudy",
+        3: "Overcast",
+        45: "Fog",
+        48: "Depositing rime fog",
+        51: "Light drizzle",
+        53: "Moderate drizzle",
+        55: "Dense drizzle",
+        61: "Slight rain",
+        63: "Moderate rain",
+        65: "Heavy rain",
+        71: "Slight snow",
+        73: "Moderate snow",
+        75: "Heavy snow",
+        80: "Rain showers",
+        81: "Moderate rain showers",
+        82: "Violent rain showers",
+        95: "Thunderstorm",
+        96: "Thunderstorm with hail",
+        99: "Severe thunderstorm with hail",
+    }
+    return weather_codes.get(code, "Weather conditions unavailable")
 
 
 # ══════════════════════════════════════════════════════════════════════

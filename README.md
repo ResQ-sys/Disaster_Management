@@ -42,12 +42,12 @@ Note: the custom `needs.csv` and `resources.csv` files are synthetic starter dat
 - Streamlit
 - LangGraph
 - LangChain
-- OpenAI API
+- Ollama (`llama3.2:1b`)
 - ChromaDB
 - sentence-transformers
 - pandas
 - folium
-- OpenWeatherMap API
+- Open-Meteo forecast API
 - OpenRouteService API
 
 ## Project Workflow
@@ -112,21 +112,27 @@ This structure separates the Streamlit UI, backend logic, scripts, data, and doc
 python3 -m pip install -r requirements.txt
 ```
 
-2. Add API keys in `.env`:
+2. Make sure Ollama is running locally and the `llama3.2:1b` model is available:
+
+```bash
+ollama serve
+ollama pull llama3.2:1b
+```
+
+3. Optional `.env` values:
 
 ```env
-OPENAI_API_KEY=your_key
-OPENWEATHER_API_KEY=your_key
+OLLAMA_BASE_URL=http://localhost:11434
 ORS_API_KEY=your_key
 ```
 
-3. Build the vector database:
+4. Build the vector database:
 
 ```bash
 python3 scripts/ingest.py --overwrite
 ```
 
-4. Run the Streamlit app:
+5. Run the Streamlit app:
 
 ```bash
 streamlit run app/app.py
@@ -169,7 +175,7 @@ The app also stores a stepwise `node_log` in state, which serves as an agent tra
 ## Guardrails, Limitations, and Responsible Use
 
 - This project is decision support, not an autonomous emergency dispatcher.
-- API failures can lead to fallback/mock weather behavior.
+- Live weather comes from Open-Meteo and falls back to mock data only if the request fails.
 - Route planning is approximate because exact resource coordinates are not always available.
 - Real-time availability of hospitals, shelters, and volunteers is not guaranteed.
 - All outputs must be verified by a human authority before action.

@@ -12,22 +12,33 @@ load_dotenv()
 BASE_DIR       = Path(__file__).resolve().parents[2]
 PRIMARY_DATA_DIR = BASE_DIR / "data"
 FALLBACK_DATA_DIR = BASE_DIR / "source_data"
-DATA_DIR       = PRIMARY_DATA_DIR if PRIMARY_DATA_DIR.exists() else FALLBACK_DATA_DIR
 CHROMA_DIR     = BASE_DIR / "chroma_db"
 
-# Source data files
-HOSPITAL_CSV        = DATA_DIR / "himachal_hospitals_289.csv"
-SCHOOL_PDF          = DATA_DIR / "SCHOOL_GOVT_MARCH_2021.pdf"
-SHELTER_PDF         = DATA_DIR / "Shelter Info.pdf"
-SHELTER_CSV         = PRIMARY_DATA_DIR / "hp_shelters.csv"   # optional converted file
-CWC_EXCEL           = DATA_DIR / "TableViewStationForecastData.xlsx"
-LANDSLIDE_PDF       = DATA_DIR / "Landslide Inventory Mapping (Post Monsoon for Himachal Pradesh) -2023.pdf"
-BLOCKED_ROADS_CSV   = DATA_DIR / "hp_blocked_corridors.csv"
-EMERGENCY_CONTACTS  = DATA_DIR / "hp_emergency_contacts.json"
 
-# ── API Keys (set in .env) ─────────────────────────────────────────────
-OPENAI_API_KEY       = os.getenv("OPENAI_API_KEY", "")
-OPENWEATHER_API_KEY  = os.getenv("OPENWEATHER_API_KEY", "")
+def resolve_data_file(filename: str, prefer_primary: bool = False) -> Path:
+    """Resolve a data file from data/ or source_data/ depending on where it exists."""
+    primary_path = PRIMARY_DATA_DIR / filename
+    fallback_path = FALLBACK_DATA_DIR / filename
+
+    if prefer_primary and primary_path.exists():
+        return primary_path
+    if fallback_path.exists():
+        return fallback_path
+    return primary_path
+
+
+# Source data files
+HOSPITAL_CSV        = resolve_data_file("himachal_hospitals_289.csv")
+SCHOOL_PDF          = resolve_data_file("SCHOOL_GOVT_MARCH_2021.pdf")
+SHELTER_PDF         = resolve_data_file("Shelter Info.pdf")
+SHELTER_CSV         = resolve_data_file("hp_shelters.csv", prefer_primary=True)   # optional converted file
+CWC_EXCEL           = resolve_data_file("TableViewStationForecastData.xlsx")
+LANDSLIDE_PDF       = resolve_data_file("Landslide Inventory Mapping (Post Monsoon for Himachal Pradesh) -2023.pdf")
+BLOCKED_ROADS_CSV   = resolve_data_file("hp_blocked_corridors.csv", prefer_primary=True)
+EMERGENCY_CONTACTS  = resolve_data_file("hp_emergency_contacts.json", prefer_primary=True)
+
+# ── Runtime Configuration ──────────────────────────────────────────────
+OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 ORS_API_KEY          = os.getenv("ORS_API_KEY", "")          # openrouteservice.org
 
 # ── Embedding Model ────────────────────────────────────────────────────
@@ -42,8 +53,8 @@ COLLECTION_CWC        = "hp_cwc_stations"
 COLLECTION_KNOWLEDGE  = "hp_disaster_knowledge"   # landslide PDF + NDMA guidelines
 
 # ── LangGraph LLM ─────────────────────────────────────────────────────
-LLM_MODEL       = "gpt-4o-mini"    # cost-efficient; swap to gpt-4o for demo
-LLM_TEMPERATURE = 0.1              # low temp = consistent, factual outputs
+LLM_MODEL       = "llama3.2:1b"
+LLM_TEMPERATURE = 0.1
 
 # ── HP Districts & Risk Tiers (from HIMCOSTE 2023 Landslide Inventory) ─
 DISTRICT_RISK = {
@@ -83,8 +94,8 @@ IMD_ALERTS = {
     "GREEN":  "Normal conditions. No immediate risk.",
 }
 
-# ── OpenWeatherMap ─────────────────────────────────────────────────────
-OWM_BASE_URL = "https://api.openweathermap.org/data/2.5"
+# ── Open-Meteo ─────────────────────────────────────────────────────────
+OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
 # ── OpenRouteService ───────────────────────────────────────────────────
 ORS_BASE_URL = "https://api.openrouteservice.org/v2"
