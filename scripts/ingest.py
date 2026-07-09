@@ -11,7 +11,6 @@ Sources ingested:
   5. Landslide PDF + NDMA text         → hp_disaster_knowledge
 """
 
-import json
 import re
 import pandas as pd
 import chromadb
@@ -24,10 +23,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from resq_project.config import (
-    CHROMA_DIR, HOSPITAL_CSV, SCHOOL_PDF, SHELTER_CSV,
-    CWC_EXCEL, LANDSLIDE_PDF, EMBEDDING_MODEL,
+    CHROMA_DIR, HOSPITAL_CSV, SCHOOL_PDF,
+    CWC_EXCEL, LANDSLIDE_PDF, GLACIAL_LAKES_CSV, EMBEDDING_MODEL,
     COLLECTION_HOSPITALS, COLLECTION_SHELTERS, COLLECTION_SCHOOLS,
-    COLLECTION_CWC, COLLECTION_KNOWLEDGE, DISTRICT_RISK, BLOCKED_CORRIDORS
+    COLLECTION_CWC, COLLECTION_KNOWLEDGE, COLLECTION_GLACIAL,
+    DISTRICT_RISK, BLOCKED_CORRIDORS
 )
 
 
@@ -122,14 +122,6 @@ def ingest_schools(client, overwrite=False):
 
     reader = PdfReader(str(SCHOOL_PDF))
     documents, metadatas, ids = [], [], []
-
-    # Regex to extract school entries from the PDF
-    # Pattern: SR.NO + SCHOOL CODE + DISTRICT + SCHOOL NAME + CONTACT
-    school_pattern = re.compile(
-        r'(\d+)\s+(\d{4})\s+([\w\s]+?)\s+\d{4}\s*-\s*(GOVT[\w\s&.()/-]+?)\s*-\s*[\w\s]+\s+'
-        r'[\w@.]+\s+([\w\s.]+?)\s+(\d{10})\s+(GOVT|PVT)',
-        re.IGNORECASE
-    )
 
     school_id = 0
     for page_num, page in enumerate(reader.pages):
@@ -309,6 +301,59 @@ def ingest_cwc_stations(client, overwrite=False):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 4b. GLACIAL LAKES — GLOF monitoring (CWC Sept 2025)
+# ══════════════════════════════════════════════════════════════════════
+def ingest_glacial_lakes(client, overwrite=False):
+    logger.info("Ingesting glacial lakes (GLOF monitoring)...")
+    col = get_or_create_collection(client, COLLECTION_GLACIAL, overwrite)
+
+    if col.count() > 0 and not overwrite:
+        logger.info(f"  → Skipping: {col.count()} glacial lakes already loaded")
+        return
+
+    if not GLACIAL_LAKES_CSV.exists():
+        logger.warning(f"  → {GLACIAL_LAKES_CSV} not found — run scripts/build_glacial_lakes_csv.py first")
+        return
+
+    df = pd.read_csv(GLACIAL_LAKES_CSV).fillna("")
+    documents, metadatas, ids = [], [], []
+
+    for i, row in df.iterrows():
+        trend = str(row["status"]).upper()
+        pct = row["area_pct_change"]
+        doc = (
+            f"Glacial Lake (GLOF monitoring): {row['lake_id']} | "
+            f"District: {row['district']} | Basin: {row['basin']} | "
+            f"River: {row['river'] or 'N/A'} | "
+            f"Water-spread area trend: {trend} ({pct}% vs base year) | "
+            f"Coordinates: {row['latitude']}N, {row['longitude']}E | "
+            f"Monitored: {row['monitored_period']} | "
+            f"NOTE: Based on previous-year monthly satellite monitoring, not real-time. "
+            f"Expanding lakes indicate elevated GLOF (Glacial Lake Outburst Flood) risk. "
+            f"Source: {row['source']}"
+        )
+        meta = {
+            "lake_id":          str(row["lake_id"]),
+            "district":         str(row["district"]).upper(),
+            "basin":            str(row["basin"]),
+            "river":            str(row["river"]),
+            "latitude":         str(row["latitude"]),
+            "longitude":        str(row["longitude"]),
+            "area_pct_change":  str(pct),
+            "status":           str(row["status"]),
+            "monitored_period": str(row["monitored_period"]),
+            "type":             "GLACIAL_LAKE_GLOF",
+            "source":           str(row["source"]),
+        }
+        documents.append(doc)
+        metadatas.append(meta)
+        ids.append(f"glof_{row['lake_id']}")
+
+    col.upsert(documents=documents, metadatas=metadatas, ids=ids)
+    logger.success(f"  ✓ {col.count()} glacial lakes ingested (GLOF monitoring)")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # 5. DISASTER KNOWLEDGE BASE (Landslide PDF + Risk data)
 # ══════════════════════════════════════════════════════════════════════
 def ingest_knowledge_base(client, overwrite=False):
@@ -472,12 +517,14 @@ def run_ingestion(overwrite: bool = False):
     ingest_schools(client, overwrite)
     ingest_shelters(client, overwrite)
     ingest_cwc_stations(client, overwrite)
+    ingest_glacial_lakes(client, overwrite)
     ingest_knowledge_base(client, overwrite)
 
     # Summary
     logger.info("\n── Collection Summary ──")
     for name in [COLLECTION_HOSPITALS, COLLECTION_SCHOOLS,
-                 COLLECTION_SHELTERS, COLLECTION_CWC, COLLECTION_KNOWLEDGE]:
+                 COLLECTION_SHELTERS, COLLECTION_CWC, COLLECTION_GLACIAL,
+                 COLLECTION_KNOWLEDGE]:
         try:
             col = client.get_collection(name, embedding_function=get_embedding_fn())
             logger.info(f"  {name}: {col.count()} documents")

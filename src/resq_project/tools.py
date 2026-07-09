@@ -13,7 +13,6 @@ Tools:
   get_district_risk()     → HIMCOSTE district risk tier
 """
 
-import json
 import math
 import requests
 from typing import Optional
@@ -24,9 +23,9 @@ from chromadb.utils import embedding_functions
 from resq_project.config import (
     CHROMA_DIR, EMBEDDING_MODEL, ORS_API_KEY,
     COLLECTION_HOSPITALS, COLLECTION_SHELTERS, COLLECTION_SCHOOLS,
-    COLLECTION_CWC, COLLECTION_KNOWLEDGE,
+    COLLECTION_CWC, COLLECTION_KNOWLEDGE, COLLECTION_GLACIAL,
     OPEN_METEO_BASE_URL, ORS_BASE_URL,
-    BLOCKED_CORRIDORS, DISTRICT_RISK
+    BLOCKED_CORRIDORS, DISTRICT_RISK, WILDFIRE_CSV
 )
 
 
@@ -255,9 +254,9 @@ def query_shelters(district: str, n_results: int = 5) -> list[dict]:
                 results.append({
                     "name":     meta.get("name"),
                     "district": meta.get("district"),
-                    "capacity": "As activated by District Collector",
+                    "capacity": "",
                     "type":     "GOVT_SCHOOL_SHELTER",
-                    "contact":  meta.get("contact", "N/A"),
+                    "contact":  "",
                     "source":   "HP Education Dept",
                 })
     except Exception as e:
@@ -345,11 +344,20 @@ def get_route(
     """
     Get driving route from origin to destination using OpenRouteService.
     Profiles: 'driving-car', 'foot-walking'
-    Falls back to straight-line estimate if API key not set.
+
+    ORS is the sole routing source: if no API key is configured or the API
+    call fails, this returns an error route (no distance/time) rather than a
+    straight-line estimate.
     """
     if not ORS_API_KEY:
-        logger.warning("ORS API key not set. Using straight-line distance estimate.")
-        return _straight_line_route(origin_lat, origin_lon, dest_lat, dest_lon)
+        logger.warning("ORS API key not set — cannot compute route.")
+        return {
+            "distance_km":  None,
+            "duration_min": None,
+            "turn_by_turn": [],
+            "source":       "unavailable",
+            "error":        "ORS_API_KEY not set — add it to .env to enable routing.",
+        }
 
     try:
         url = f"{ORS_BASE_URL}/directions/{profile}"
@@ -376,23 +384,59 @@ def get_route(
 
     except Exception as e:
         logger.error(f"ORS routing error: {e}")
-        return _straight_line_route(origin_lat, origin_lon, dest_lat, dest_lon)
+        return {
+            "distance_km":  None,
+            "duration_min": None,
+            "turn_by_turn": [],
+            "source":       "error",
+            "error":        f"OpenRouteService request failed: {e}",
+        }
 
 
-def _straight_line_route(lat1, lon1, lat2, lon2) -> dict:
-    """Haversine distance fallback when ORS is unavailable."""
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat/2)**2 +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2)
-    dist_km = R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+def straight_line_route(origin_lat, origin_lon, dest_lat, dest_lon) -> dict:
+    """Approximate as-the-crow-flies route, used only as a fallback when ORS
+    routing is unavailable. Distance is the straight-line (haversine) distance;
+    time assumes ~30 km/h on HP mountain roads. Clearly labelled as approximate.
+    """
+    dist_km = _haversine(origin_lat, origin_lon, dest_lat, dest_lon)
     return {
-        "distance_km":  round(dist_km, 2),
-        "duration_min": round(dist_km / 30 * 60, 1),  # assume 30 km/h mountain roads
-        "turn_by_turn": ["Straight-line estimate only — ORS API key required for real route"],
-        "source":       "Haversine_Estimate",
+        "distance_km":  round(dist_km, 1),
+        "duration_min": round(dist_km / 30 * 60),   # ~30 km/h mountain roads
+        "turn_by_turn": [],
+        "source":       "straight_line_approx",
     }
+
+
+# Simple in-process cache so we don't re-hit Nominatim for the same place.
+_GEOCODE_CACHE: dict[str, Optional[tuple]] = {}
+
+
+def geocode_place(query: str) -> Optional[tuple]:
+    """Geocode a free-text place to (lat, lon) via Nominatim (OpenStreetMap).
+
+    Returns None if the query cannot be resolved or geocoding is unavailable.
+    Nominatim's usage policy asks for a descriptive user-agent and low volume,
+    both of which we satisfy (single lookup per request, cached).
+    """
+    if not query or not query.strip():
+        return None
+
+    key = query.strip().lower()
+    if key in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[key]
+
+    result = None
+    try:
+        from geopy.geocoders import Nominatim
+        geolocator = Nominatim(user_agent="resq_disaster_agent")
+        loc = geolocator.geocode(query, timeout=10)
+        if loc:
+            result = (round(loc.latitude, 4), round(loc.longitude, 4))
+    except Exception as e:
+        logger.warning(f"geocode_place failed for {query!r}: {e}")
+
+    _GEOCODE_CACHE[key] = result
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -487,3 +531,136 @@ def _haversine(lat1, lon1, lat2, lon2) -> float:
     a = (math.sin(dlat/2)**2 +
          math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2)
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TOOL 10 — GLACIAL LAKES (GLOF monitoring, CWC Sept 2025)
+# ══════════════════════════════════════════════════════════════════════
+def query_glacial_lakes(district: str = "", user_lat: float = None,
+                        user_lon: float = None, n_results: int = 5) -> list[dict]:
+    """
+    Return HP glacial lakes relevant to a GLOF assessment.
+
+    Prioritises lakes in the user's district, then by proximity to the user's
+    coordinates. Each lake carries its water-spread-area trend (increase =
+    elevated GLOF risk). Data is from CWC's previous-year monthly satellite
+    monitoring (September 2025), NOT real-time.
+    """
+    try:
+        col = _get_collection(COLLECTION_GLACIAL)
+        all_data = col.get(include=["metadatas"])
+        lakes = []
+        for meta in all_data["metadatas"]:
+            try:
+                llat = float(meta.get("latitude", 0))
+                llon = float(meta.get("longitude", 0))
+            except (TypeError, ValueError):
+                llat = llon = 0.0
+            dist = None
+            if user_lat is not None and user_lon is not None and llat and llon:
+                dist = round(_haversine(user_lat, user_lon, llat, llon), 1)
+            lakes.append({
+                "lake_id":         meta.get("lake_id"),
+                "district":        meta.get("district"),
+                "basin":           meta.get("basin"),
+                "river":           meta.get("river"),
+                "latitude":        llat,
+                "longitude":       llon,
+                "status":          meta.get("status"),
+                "area_pct_change": meta.get("area_pct_change"),
+                "monitored_period": meta.get("monitored_period"),
+                "distance_km":     dist,
+                "source":          meta.get("source"),
+            })
+
+        d = (district or "").upper()
+
+        def sort_key(lk):
+            same_district = 0 if lk["district"] == d else 1
+            increasing = 0 if lk["status"] == "increase" else 1
+            proximity = lk["distance_km"] if lk["distance_km"] is not None else 9e9
+            return (same_district, increasing, proximity)
+
+        lakes.sort(key=sort_key)
+        return lakes[:n_results]
+
+    except Exception as e:
+        logger.error(f"Glacial lake query error: {e}")
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TOOL 11 — WILDFIRE PRONENESS (historical VIIRS fire hotspots)
+# ══════════════════════════════════════════════════════════════════════
+_wildfire_pts = None   # cached (lat_array, lon_array)
+
+
+def _load_wildfire_points():
+    """Load & cache the historical fire-hotspot coordinates as numpy arrays."""
+    global _wildfire_pts
+    if _wildfire_pts is None:
+        import pandas as pd
+        df = pd.read_csv(WILDFIRE_CSV, usecols=["Lat", "Lon"]).dropna()
+        _wildfire_pts = (df["Lat"].to_numpy(dtype=float),
+                         df["Lon"].to_numpy(dtype=float))
+    return _wildfire_pts
+
+
+def assess_wildfire_risk(user_lat: float, user_lon: float) -> dict:
+    """
+    Flag whether a location (lat/lon) is prone to wildfires, based on the
+    density of historical satellite fire detections (VIIRS) nearby.
+
+    Levels by count of past fire hotspots within 10 km:
+        HIGH     >= 100   |  MODERATE 25-99  |  LOW 1-24  |  MINIMAL 0
+    'prone' is True for MODERATE and HIGH.
+
+    NOTE: Based on past-year historical satellite fire-detection points,
+    not a live fire feed.
+    """
+    try:
+        import numpy as np
+        lat, lon = _load_wildfire_points()
+
+        R = 6371.0
+        dlat = np.radians(lat - user_lat)
+        dlon = np.radians(lon - user_lon)
+        a = (np.sin(dlat / 2) ** 2 +
+             np.cos(np.radians(user_lat)) * np.cos(np.radians(lat)) * np.sin(dlon / 2) ** 2)
+        dist = R * 2 * np.arcsin(np.sqrt(a))
+
+        count_5 = int((dist <= 5).sum())
+        count_10 = int((dist <= 10).sum())
+        nearest = round(float(dist.min()), 1) if dist.size else None
+
+        if count_10 >= 100:
+            level = "HIGH"
+        elif count_10 >= 25:
+            level = "MODERATE"
+        elif count_10 >= 1:
+            level = "LOW"
+        else:
+            level = "MINIMAL"
+
+        prone = level in ("HIGH", "MODERATE")
+        msg = {
+            "HIGH":     "High wildfire proneness — dense history of fire detections nearby.",
+            "MODERATE": "Moderate wildfire proneness — notable fire history in the area.",
+            "LOW":      "Low wildfire proneness — limited fire history nearby.",
+            "MINIMAL":  "Minimal wildfire proneness — no recorded fires within 10 km.",
+        }[level]
+
+        return {
+            "level":       level,
+            "prone":       prone,
+            "count_5km":   count_5,
+            "count_10km":  count_10,
+            "nearest_km":  nearest,
+            "message":     msg,
+            "disclaimer":  "Based on past-year historical satellite fire detections (VIIRS), not a live fire feed.",
+            "source":      "VIIRS Active Fire / Hotspot history (HP)",
+        }
+
+    except Exception as e:
+        logger.error(f"Wildfire assessment error: {e}")
+        return {"level": "UNKNOWN", "prone": False, "error": str(e)}
