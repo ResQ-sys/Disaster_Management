@@ -32,8 +32,11 @@ from resq_project.config import LLM_MODEL, LLM_TEMPERATURE, OLLAMA_BASE_URL
 from resq_project.tools import (
     get_weather, query_hospitals, query_shelters,
     query_cwc_stations, query_knowledge, get_route,
-    check_road_risk, get_district_risk, find_nearest_cwc_station
+    check_road_risk, get_district_risk, find_nearest_cwc_station,
+    geocode_place, straight_line_route, query_glacial_lakes,
+    assess_wildfire_risk
 )
+import re
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -55,6 +58,11 @@ class DisasterState(TypedDict):
     district_risk:   dict
     nearest_cwc:     dict
     imd_alert_level: str
+    wildfire_risk:   dict         # historical VIIRS fire-hotspot proneness
+
+    # ── GLOF Monitoring (GLOF Monitor Agent fills these) ───────────
+    glacial_lakes:   list[dict]
+    glof_alert:      dict
 
     # ── Found Resources (Resource Finder fills these) ──────────────
     hospitals:       list[dict]
@@ -69,10 +77,12 @@ class DisasterState(TypedDict):
 
     # ── Route (Route Planning Agent fills these) ───────────────────
     route:           dict
+    routes:          list
     road_risks:      list[dict]
     route_warning:   str
 
     # ── Final Output (Escalation Agent fills these) ────────────────
+    urgency:         dict         # explainable urgency score
     final_report:    str
     escalation_needed: bool
     escalation_reason: str
@@ -95,47 +105,120 @@ def get_llm():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# URGENCY SCORING — deterministic & explainable (0-100)
+# ══════════════════════════════════════════════════════════════════════
+_ALERT_URGENCY = {"RED": 35, "ORANGE": 25, "YELLOW": 15, "GREEN": 5}
+_TIER_URGENCY  = {"CRITICAL": 25, "HIGH": 18, "MEDIUM": 10, "LOW": 5, "UNKNOWN": 8}
+_NEED_URGENCY  = {"Rescue": 10, "Medical": 10, "Evacuation": 9,
+                  "Shelter": 6, "Water": 6, "Food": 4}
+
+
+def compute_urgency_score(state: "DisasterState") -> dict:
+    """Transparent urgency score from situation signals. Returns score, level
+    and a per-factor breakdown so the routing decision is explainable."""
+    b = {}
+    b["imd_alert"] = _ALERT_URGENCY.get(str(state.get("imd_alert_level", "GREEN")).upper(), 5)
+    b["district_tier"] = _TIER_URGENCY.get(
+        str(state.get("district_risk", {}).get("risk_tier", "UNKNOWN")).upper(), 8)
+
+    # Needs — take the two most severe reported needs (capped)
+    need_pts = sorted((_NEED_URGENCY.get(n, 3) for n in state.get("needs", [])), reverse=True)
+    b["needs"] = sum(need_pts[:2])
+
+    glof = state.get("glof_alert", {}) or {}
+    b["glof"] = 12 if glof.get("level") == "WATCH" else (6 if glof.get("level") == "ADVISORY" else 0)
+
+    wf = state.get("wildfire_risk", {}) or {}
+    b["wildfire"] = {"HIGH": 10, "MODERATE": 6, "LOW": 2}.get(wf.get("level"), 0)
+
+    b["escalation"] = 10 if state.get("escalation_needed") else 0
+
+    score = min(100, round(sum(b.values())))
+    level = ("CRITICAL" if score >= 75 else "HIGH" if score >= 50 else
+             "MODERATE" if score >= 30 else "LOW")
+    return {"score": score, "level": level, "breakdown": b}
+
+
+# ══════════════════════════════════════════════════════════════════════
 # NODE 1 — INTAKE AGENT
 # Role: Understand the situation; enrich with weather + district risk
 # ══════════════════════════════════════════════════════════════════════
 def intake_agent(state: DisasterState) -> DisasterState:
-    llm = get_llm()
-
     # Fetch real-time context
     weather      = get_weather(state["latitude"], state["longitude"], state["district"])
     district_risk = get_district_risk(state["district"])
     nearest_cwc  = find_nearest_cwc_station(state["latitude"], state["longitude"])
+    wildfire_risk = assess_wildfire_risk(state["latitude"], state["longitude"])
     risk_knowledge = query_knowledge(
         f"disaster risk {state['district']} {state['disaster_type']} Himachal Pradesh"
     )
-
-    # LLM: assess situation severity
-    system = """You are the Intake Agent for HP Disaster Relief. 
-    Assess the situation and provide a concise severity summary (2-3 sentences).
-    Be factual, calm, and action-oriented. Never fabricate data."""
-
-    prompt = f"""
-Situation Report:
-- District: {state['district']} | Location: {state['location_desc']}
-- Disaster Type: {state['disaster_type']}
-- Needs Reported: {', '.join(state['needs'])}
-- Weather: {weather['description']} | Rainfall 24h forecast: {weather['forecast_rain_24h']}mm | Alert: {weather['alert_level']}
-- District Risk Tier (HIMCOSTE 2023): {district_risk.get('risk_tier')} | Landslides 2023: {district_risk.get('landslides_2023', 'N/A')}
-- Nearest CWC Station: {nearest_cwc.get('name', 'N/A')} on {nearest_cwc.get('river', 'N/A')} ({nearest_cwc.get('distance_km', 'N/A')} km)
-- Relevant Context: {' | '.join(risk_knowledge[:2])}
-
-Provide a 2-sentence situation severity assessment.
-"""
-    response = llm.invoke([SystemMessage(content=system), HumanMessage(content=prompt)])
 
     return {
         **state,
         "weather":         weather,
         "district_risk":   district_risk,
         "nearest_cwc":     nearest_cwc,
+        "wildfire_risk":   wildfire_risk,
         "imd_alert_level": weather.get("alert_level", "GREEN"),
         "knowledge_chunks": risk_knowledge,
-        "node_log":        [f"✓ intake_agent: {weather['alert_level']} alert, {district_risk.get('risk_tier')} risk district"],
+        "node_log":        [f"✓ intake_agent: {weather['alert_level']} alert, {district_risk.get('risk_tier')} risk district"
+                            + f" | wildfire {wildfire_risk.get('level', 'N/A')}"],
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NODE 1b — GLOF MONITOR AGENT
+# Role: Flag expanding glacial lakes near the user (GLOF early-warning)
+# Data: CWC monthly satellite monitoring (Sep 2025) — previous-year, not live
+# ══════════════════════════════════════════════════════════════════════
+GLOF_SENSITIVE = ("GLOF", "Flash Flood", "Cloudburst")
+
+
+def glof_monitor_agent(state: DisasterState) -> DisasterState:
+    district = state["district"]
+    disaster = state["disaster_type"]
+    lakes = query_glacial_lakes(district, state["latitude"], state["longitude"], n_results=5)
+
+    increasing = [lk for lk in lakes if lk.get("status") == "increase"]
+    alert = {}
+    if increasing:
+        nearest = min(
+            increasing,
+            key=lambda lk: lk["distance_km"] if lk["distance_km"] is not None else 9e9,
+        )
+        in_district = [lk for lk in increasing if lk.get("district") == district.upper()]
+        # Heighten level for water-driven hazards where GLOF is directly relevant
+        level = "WATCH" if disaster in GLOF_SENSITIVE else "ADVISORY"
+        dist_txt = f"~{nearest['distance_km']} km away" if nearest["distance_km"] is not None else "in the region"
+        river_txt = nearest.get("river") or nearest.get("basin") or "Himalayan"
+        alert = {
+            "level":             level,
+            "count_increasing":  len(increasing),
+            "count_in_district": len(in_district),
+            "nearest":           nearest,
+            "monitored_period":  nearest.get("monitored_period", "September 2025"),
+            "message": (
+                f"{len(increasing)} glacial lake(s) near {district.title()} showed an "
+                f"increase in water-spread area in the latest CWC monthly monitoring. "
+                f"Nearest expanding lake {nearest['lake_id']} ({river_txt} basin, {dist_txt}, "
+                f"+{nearest.get('area_pct_change')}%). This indicates elevated GLOF risk "
+                f"downstream — monitor CWC advisories and avoid river banks."
+            ),
+            "disclaimer": (
+                "Based on previous-year monthly satellite monitoring "
+                f"({nearest.get('monitored_period', 'Sep 2025')}), not real-time water levels."
+            ),
+        }
+
+    return {
+        **state,
+        "glacial_lakes": lakes,
+        "glof_alert":    alert,
+        "node_log": [
+            f"✓ glof_monitor_agent: {len(lakes)} lakes considered, "
+            f"{len(increasing)} increasing"
+            + (f" → {alert['level']} alert" if alert else " → no alert")
+        ],
     }
 
 
@@ -152,11 +235,11 @@ def resource_finder_agent(state: DisasterState) -> DisasterState:
     hospitals, shelters, cwc_stations = [], [], []
 
     # Medical need or any injury-risk disaster → fetch hospitals
-    if "Medical" in needs or disaster_type in ["Flash Flood", "Landslide", "Cloudburst", "GLOF", "Avalanche"]:
+    if "Medical" in needs or disaster_type in ["Flash Flood", "Landslide", "Cloudburst", "GLOF", "Avalanche", "Wildfire"]:
         hospitals = query_hospitals(district, need_type="emergency", n_results=5)
 
     # Shelter need → fetch NULM shelters + schools
-    if "Shelter" in needs or disaster_type in ["Flash Flood", "Cloudburst", "Landslide"]:
+    if "Shelter" in needs or disaster_type in ["Flash Flood", "Cloudburst", "Landslide", "Wildfire"]:
         shelters = query_shelters(district, n_results=5)
 
     # Flood/GLOF → CWC station data critical
@@ -170,8 +253,6 @@ def resource_finder_agent(state: DisasterState) -> DisasterState:
 
     # Merge with existing knowledge chunks
     all_knowledge = list(set(state.get("knowledge_chunks", []) + extra_knowledge))
-
-    resource_count = len(hospitals) + len(shelters) + len(cwc_stations)
 
     return {
         **state,
@@ -258,6 +339,96 @@ Select and rank resources. Return valid JSON only.
 # NODE 4 — ROUTE PLANNING AGENT
 # Role: Generate route + check NH road risk from HIMCOSTE data
 # ══════════════════════════════════════════════════════════════════════
+DISTRICT_CENTERS = {
+    "KANGRA":          (32.10, 76.27), "MANDI":   (31.71, 76.93),
+    "SHIMLA":          (31.10, 77.17), "KULLU":   (31.95, 77.11),
+    "SOLAN":           (30.91, 77.10), "SIRMOUR": (30.56, 77.66),
+    "BILASPUR":        (31.34, 76.76), "HAMIRPUR":(31.68, 76.52),
+    "CHAMBA":          (32.55, 76.12), "UNA":     (31.47, 76.27),
+    "KINNAUR":         (31.59, 78.44), "LAHUL AND SPITI": (32.55, 77.60),
+}
+
+
+# Generic words in facility names that aren't place names — stripped so we can
+# geocode the *town* embedded in the name (e.g. "Civil Hospital Dalhousie").
+_GENERIC_NAME_TOKENS = {
+    "hospital", "civil", "referral", "community", "health", "centre", "center",
+    "chc", "phc", "gmc", "pt", "district", "regional", "ayurvedic", "and", "the",
+    "nulm", "shelter", "govt", "government", "general", "sub", "subdivisional",
+    "dispensary", "clinic", "medical", "college", "of", "hp", "himachal", "pradesh",
+}
+
+
+def _extract_place(name: str) -> str:
+    """Pull the likely town/place token(s) out of a facility name."""
+    toks = re.split(r"[\s,\-]+", (name or "").strip())
+    keep = [t for t in toks if t and t.lower().strip(".") not in _GENERIC_NAME_TOKENS and not t.isdigit()]
+    return " ".join(keep[-2:]) if keep else ""
+
+
+def _resolve_dest(resource, name, district, center):
+    """Best-effort (lat, lon, source) for a resource — approximate is fine.
+
+    Ladder: resource coords → geocode full name → geocode the town in the
+    name → district center. Always returns a usable point.
+    """
+    try:
+        r_lat = float(resource.get("latitude", 0) or 0)
+        r_lon = float(resource.get("longitude", 0) or 0)
+        if r_lat and r_lon:
+            return r_lat, r_lon, "resource coordinates"
+    except (TypeError, ValueError):
+        pass
+
+    geo = geocode_place(f"{name}, {district.title()}, Himachal Pradesh, India")
+    if geo:
+        return geo[0], geo[1], "geocoded resource"
+
+    place = _extract_place(name)
+    if place:
+        geo = geocode_place(f"{place}, {district.title()}, Himachal Pradesh, India")
+        if geo:
+            return geo[0], geo[1], f"approx · {place}"
+
+    return center[0], center[1], "district center"
+
+
+def _route_to_resource(resource, user_lat, user_lon, district, center):
+    """Compute an (approximate) route from the user's location to a resource.
+
+    Resolves a best-effort destination, then uses ORS road routing when
+    available and falls back to a labelled straight-line estimate otherwise,
+    so a distance/time always shows. Returns a route dict enriched with the
+    resource name/type and destination coordinates.
+    """
+    if not resource:
+        return {}
+
+    name = resource.get("name", "resource")
+    d_lat, d_lon, dest_source = _resolve_dest(resource, name, district, center)
+
+    same_point = abs(d_lat - user_lat) < 1e-4 and abs(d_lon - user_lon) < 1e-4
+    if same_point:
+        route = {
+            "distance_km":  0.0,
+            "duration_min": 0.0,
+            "turn_by_turn": [f"{name} is within the immediate vicinity of the reported location."],
+            "source":       "same_locality",
+        }
+    else:
+        route = get_route(user_lat, user_lon, d_lat, d_lon)
+        # ORS unavailable/failed → approximate straight-line so a number shows.
+        if route.get("distance_km") is None:
+            route = straight_line_route(user_lat, user_lon, d_lat, d_lon)
+
+    route["name"]          = name
+    route["resource_type"] = resource.get("resource_type", resource.get("type", "RESOURCE"))
+    route["dest_source"]   = dest_source
+    route["dest_lat"]      = d_lat
+    route["dest_lon"]      = d_lon
+    return route
+
+
 def route_planning_agent(state: DisasterState) -> DisasterState:
     priority    = state.get("priority_resource", {})
     district    = state["district"]
@@ -272,6 +443,7 @@ def route_planning_agent(state: DisasterState) -> DisasterState:
             **state,
             "road_risks":   road_risks,
             "route":        {},
+            "routes":       [],
             "route_warning": "No priority resource found — cannot compute route.",
             "node_log": ["⚠ route_planning_agent: skipped — no priority resource"],
         }
@@ -284,39 +456,35 @@ def route_planning_agent(state: DisasterState) -> DisasterState:
             "⚠ WARNING: The following routes are prone to closure in current season: "
             + " | ".join(r["warning"] for r in active_risks)
         )
-    elif disaster in ["Flash Flood", "Cloudburst", "Landslide"]:
+    elif disaster in ["Flash Flood", "Cloudburst", "Landslide", "Wildfire"]:
         route_warning = "⚠ Check local road status before travel — active disaster conditions."
 
-    # Attempt routing if we have coordinates
-    route = {}
-    priority_name = priority.get("name", "resource")
-
-    # For hospitals we can do distance estimate using user coordinates
-    # (In production: geocode hospital address to get lat/lon)
     user_lat = state["latitude"]
     user_lon = state["longitude"]
+    center = DISTRICT_CENTERS.get(district.upper(), (user_lat + 0.1, user_lon + 0.1))
 
-    # Rough hospital coordinate estimation (center of district)
-    # In production: use Google Geocoding API on hospital address
-    district_centers = {
-        "KANGRA":          (32.10, 76.27), "MANDI":   (31.71, 76.93),
-        "SHIMLA":          (31.10, 77.17), "KULLU":   (31.95, 77.11),
-        "SOLAN":           (30.91, 77.10), "SIRMOUR": (30.56, 77.66),
-        "BILASPUR":        (31.34, 76.76), "HAMIRPUR":(31.68, 76.52),
-        "CHAMBA":          (32.55, 76.12), "UNA":     (31.47, 76.27),
-        "KINNAUR":         (31.59, 78.44), "LAHUL AND SPITI": (32.55, 77.60),
-    }
-    dest_center = district_centers.get(district.upper(), (user_lat + 0.1, user_lon + 0.1))
-    route = get_route(user_lat, user_lon, dest_center[0], dest_center[1])
+    # Priority route (used by the final report + summary metrics).
+    route = _route_to_resource(priority, user_lat, user_lon, district, center)
+
+    # Per-type routes: distance/time to the top hospital AND the top shelter,
+    # so the user sees both — not only the single priority pick.
+    routes = []
+    top_hospital = next(iter(state.get("hospitals", [])), None)
+    top_shelter  = next(iter(state.get("shelters", [])), None)
+    if top_hospital:
+        routes.append(_route_to_resource(top_hospital, user_lat, user_lon, district, center))
+    if top_shelter:
+        routes.append(_route_to_resource(top_shelter, user_lat, user_lon, district, center))
 
     return {
         **state,
         "road_risks":    road_risks,
         "route":         route,
+        "routes":        routes,
         "route_warning": route_warning,
         "node_log": [
-            f"✓ route_planning_agent: {route.get('distance_km', 'N/A')} km, "
-            f"{route.get('duration_min', 'N/A')} min | "
+            f"✓ route_planning_agent: priority {route.get('distance_km', 'N/A')} km / "
+            f"{route.get('duration_min', 'N/A')} min | {len(routes)} typed routes | "
             f"{len(active_risks)} active road risks"
         ],
     }
@@ -348,6 +516,9 @@ def escalation_agent(state: DisasterState) -> DisasterState:
     if not state.get("priority_resource"):
         escalation_needed = True
 
+    # Explainable urgency score (uses final escalation flag)
+    urgency = compute_urgency_score({**state, "escalation_needed": escalation_needed})
+
     system = """You are the Escalation and Report Agent for HP Disaster Relief.
     Generate a clear, actionable disaster response report.
     Format: markdown with sections.
@@ -362,6 +533,7 @@ SITUATION:
 - Location: {state.get('location_desc')} ({state['district']} district)
 - Disaster: {state['disaster_type']}
 - Needs: {', '.join(state.get('needs', []))}
+- Urgency Score: {urgency['score']}/100 ({urgency['level']}) — factors: {urgency['breakdown']}
 
 WEATHER (Open-Meteo):
 - {state.get('weather', {}).get('description', 'N/A')}
@@ -382,7 +554,13 @@ ROUTE:
 
 CWC MONITORING:
 - Nearest Station: {state.get('nearest_cwc', {}).get('name', 'N/A')} on {state.get('nearest_cwc', {}).get('river', 'N/A')}
-- Live data: https://ffs.india.gov.in
+- Live data: https://ffs.india-water.gov.in
+
+GLOF MONITORING (glacial lake outburst risk):
+{("- " + state['glof_alert']['message'] + " (" + state['glof_alert']['disclaimer'] + ")") if state.get('glof_alert') else "- No expanding glacial lakes flagged near this location."}
+
+WILDFIRE PRONENESS:
+- {state.get('wildfire_risk', {}).get('level', 'N/A')} — {state.get('wildfire_risk', {}).get('message', 'N/A')} ({state.get('wildfire_risk', {}).get('disclaimer', '')})
 
 ALL RESOURCES FOUND:
 {json.dumps(state.get('matched_resources', [])[:3], indent=2)}
@@ -396,6 +574,7 @@ Generate the complete response report in markdown.
 
     return {
         **state,
+        "urgency":           urgency,
         "final_report":      response.content,
         "escalation_needed": escalation_needed,
         "emergency_contacts": emergency_contacts,
@@ -440,6 +619,7 @@ def build_graph():
 
     # Add nodes
     graph.add_node("intake_agent",         intake_agent)
+    graph.add_node("glof_monitor_agent",   glof_monitor_agent)
     graph.add_node("resource_finder_agent", resource_finder_agent)
     graph.add_node("matching_agent",        matching_agent)
     graph.add_node("route_planning_agent",  route_planning_agent)
@@ -448,12 +628,15 @@ def build_graph():
     # Entry point
     graph.set_entry_point("intake_agent")
 
-    # Edges: intake → (conditional by disaster type) → resource_finder
+    # Edges: intake → (conditional by disaster type) → GLOF monitor → resource_finder
     graph.add_conditional_edges(
         "intake_agent",
         disaster_type_router,
-        {"resource_finder": "resource_finder_agent"}
+        {"resource_finder": "glof_monitor_agent"}
     )
+
+    # GLOF monitor → resource_finder
+    graph.add_edge("glof_monitor_agent", "resource_finder_agent")
 
     # resource_finder → matching
     graph.add_edge("resource_finder_agent", "matching_agent")
@@ -500,10 +683,11 @@ def run_agent(
         "needs":          needs,
         # All other fields start empty
         "weather": {}, "district_risk": {}, "nearest_cwc": {}, "imd_alert_level": "",
+        "wildfire_risk": {}, "glacial_lakes": [], "glof_alert": {},
         "hospitals": [], "shelters": [], "cwc_stations": [], "knowledge_chunks": [],
         "matched_resources": [], "priority_resource": {}, "match_reasoning": "",
-        "route": {}, "road_risks": [], "route_warning": "",
-        "final_report": "", "escalation_needed": False,
+        "route": {}, "routes": [], "road_risks": [], "route_warning": "",
+        "urgency": {}, "final_report": "", "escalation_needed": False,
         "escalation_reason": "", "emergency_contacts": [],
         "error_log": [], "node_log": [],
     }

@@ -36,10 +36,16 @@ CWC_EXCEL           = resolve_data_file("TableViewStationForecastData.xlsx")
 LANDSLIDE_PDF       = resolve_data_file("Landslide Inventory Mapping (Post Monsoon for Himachal Pradesh) -2023.pdf")
 BLOCKED_ROADS_CSV   = resolve_data_file("hp_blocked_corridors.csv", prefer_primary=True)
 EMERGENCY_CONTACTS  = resolve_data_file("hp_emergency_contacts.json", prefer_primary=True)
+GLACIAL_LAKES_CSV   = resolve_data_file("hp_glacial_lakes.csv")   # CWC GLOF monitoring (Sep 2025)
+WILDFIRE_CSV        = resolve_data_file("Past_Data_For_Wildfire_detection_HP.csv")  # VIIRS fire hotspots
+NEEDS_CSV           = resolve_data_file("needs.csv", prefer_primary=True)       # volunteer/relief needs
+RESOURCES_CSV       = resolve_data_file("resources.csv", prefer_primary=True)   # volunteer/relief resources
+APPROVALS_LOG       = BASE_DIR / "logs" / "approvals.jsonl"                     # human-in-loop audit log
 
 # ── Runtime Configuration ──────────────────────────────────────────────
 OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 ORS_API_KEY          = os.getenv("ORS_API_KEY", "")          # openrouteservice.org
+AGENT_COORDINATOR_EMAIL = os.getenv("AGENT_COORDINATOR_EMAIL", "demo.coordinator@example.com")
 
 # ── Embedding Model ────────────────────────────────────────────────────
 # Using sentence-transformers as required
@@ -51,6 +57,7 @@ COLLECTION_SHELTERS   = "hp_shelters"
 COLLECTION_SCHOOLS    = "hp_schools"
 COLLECTION_CWC        = "hp_cwc_stations"
 COLLECTION_KNOWLEDGE  = "hp_disaster_knowledge"   # landslide PDF + NDMA guidelines
+COLLECTION_GLACIAL    = "hp_glacial_lakes"        # CWC GLOF monitoring (Sep 2025)
 
 # ── LangGraph LLM ─────────────────────────────────────────────────────
 LLM_MODEL       = "llama3.2:1b"
@@ -84,7 +91,7 @@ BLOCKED_CORRIDORS = [
 ]
 
 # ── Disaster Types & Response Protocols ───────────────────────────────
-DISASTER_TYPES = ["Flash Flood", "Landslide", "Cloudburst", "GLOF", "Avalanche", "Drought", "Road Blockage"]
+DISASTER_TYPES = ["Flash Flood", "Landslide", "Cloudburst", "GLOF", "Wildfire", "Avalanche", "Drought", "Road Blockage"]
 
 # ── IMD Alert Levels ───────────────────────────────────────────────────
 IMD_ALERTS = {

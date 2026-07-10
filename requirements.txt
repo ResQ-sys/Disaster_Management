@@ -29,3 +29,6 @@ streamlit-folium>=0.20.0
 # Utilities
 python-dotenv>=1.0.0
 loguru>=0.7.0
+
+# Testing
+pytest>=8.0.0

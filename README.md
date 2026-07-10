@@ -26,13 +26,15 @@ Primary reference sources used in this repository:
   Link: https://www.kaggle.com/datasets/vstepanenko/disaster-tweets
   Use: contextual reference for disaster-related language and scenario framing
 - Custom relief resource data in this project:
-  - `data/needs.csv`
-  - `data/resources.csv`
+  - `data/needs.csv` — reported relief needs (volunteer worklist)
+  - `data/resources.csv` — available volunteer/relief resources
   - `source_data/himachal_hospitals_289.csv`
   - `source_data/SCHOOL_GOVT_MARCH_2021.pdf`
   - `source_data/Shelter Info.pdf`
   - `source_data/TableViewStationForecastData.xlsx`
   - `source_data/Landslide Inventory Mapping (Post Monsoon for Himachal Pradesh) -2023.pdf`
+  - `source_data/hp_glacial_lakes.csv` — GLOF risk, extracted from the CWC *Monthly Monitoring Report of Glacial Lakes, September 2025*
+  - `source_data/Past_Data_For_Wildfire_detection_HP.csv` — VIIRS satellite fire-hotspot history (wildfire proneness)
 
 Note: the custom `needs.csv` and `resources.csv` files are synthetic starter data, which is acceptable under the project brief when full operational data is not available.
 
@@ -52,27 +54,38 @@ Note: the custom `needs.csv` and `resources.csv` files are synthetic starter dat
 
 ## Project Workflow
 
-1. User enters district, location, disaster type, coordinates, and immediate needs.
-2. Intake agent fetches weather, district risk, nearby flood station context, and disaster knowledge.
-3. Resource finder retrieves hospitals, shelters, and monitoring resources.
-4. Matching agent ranks the most suitable resources based on need and context.
-5. Route planner estimates travel route risk when a priority resource is available.
-6. Escalation/report agent prepares a final response report and emergency coordination message.
-7. Human reviewer verifies the recommendation before any real action is taken.
+The core response pipeline is a 6-node LangGraph agent:
+
+1. User enters district, location, disaster type, and immediate needs (coordinates are auto-derived by geocoding).
+2. **Intake agent** fetches weather, district risk, nearest CWC flood station, disaster knowledge, and a **wildfire-proneness** flag (from VIIRS fire history).
+3. **GLOF monitor agent** flags expanding glacial lakes near the location (CWC Sept-2025 monitoring) — GLOF early warning.
+4. **Resource finder** retrieves hospitals, shelters, and river-monitoring stations from ChromaDB.
+5. **Matching agent** ranks the most suitable resources for the reported needs.
+6. **Route planner** estimates travel distance/time and road risk to the resource.
+7. **Escalation/report agent** computes an **explainable urgency score** and prepares a final report + coordination message.
+8. A **human reviewer approves the coordination message** before any real action is taken.
+
+Two additional interactive features sit alongside the agent:
+
+- **Volunteer Need↔Resource Matching** — a deterministic engine matches `needs.csv` against `resources.csv` and drafts an approve-before-send coordination message per match.
+- **Grounded RAG chatbot** — answers questions strictly from the ingested data, and refuses out-of-scope questions.
 
 ## AI / Agent Component
 
-This project uses AI meaningfully in three places:
+This project uses AI/logic meaningfully in several places:
 
-- Retrieval: ChromaDB plus sentence-transformers is used to retrieve relevant hospitals, shelters, stations, and disaster knowledge.
-- Matching: an LLM ranks candidate resources and explains why the top option was selected.
-- Human-in-the-loop reporting: the agent generates a structured coordination note rather than acting autonomously.
+- **Retrieval (RAG):** ChromaDB + sentence-transformers retrieve relevant hospitals, shelters, stations, glacial-lake, and disaster-knowledge records.
+- **Matching:** an LLM ranks institutional resources; a separate **deterministic scoring engine** (`coordination.py`) matches volunteer needs↔resources by category, location, quantity, and availability (transparent, reproducible).
+- **Urgency scoring:** an explainable 0–100 score combining IMD alert, district risk tier, need severity, GLOF, and wildfire signals — with a per-factor breakdown.
+- **Spatial risk models:** wildfire proneness from historical fire-hotspot density; GLOF risk from glacial-lake area change.
+- **Grounded RAG chatbot:** a relevance gate + strict grounding prompt prevent hallucination and answer only from source data.
+- **Human-in-the-loop:** every coordination message is drafted for a human to edit → approve → send, logged to an audit trail (`logs/approvals.jsonl`). Nothing is dispatched autonomously.
 
 Why this is useful:
 
 - disaster inputs are noisy and incomplete
 - multiple resource types may match the same need
-- responders need an interpretable recommendation, not raw database output
+- responders need an interpretable, auditable recommendation, not raw database output
 
 ## Repository Structure
 
@@ -84,10 +97,17 @@ Disaster_Management/
 │   └── resq_project/
 │       ├── __init__.py
 │       ├── config.py
-│       ├── tools.py
-│       └── workflow.py
+│       ├── tools.py            # retrieval, weather, routing, wildfire, GLOF tools
+│       ├── workflow.py         # 6-node LangGraph pipeline + urgency scoring
+│       ├── chatbot.py          # grounded RAG chatbot (relevance gate)
+│       └── coordination.py     # volunteer matching + human-in-loop messages
 ├── scripts/
-│   └── ingest.py
+│   ├── ingest.py                    # build ChromaDB collections
+│   └── build_glacial_lakes_csv.py   # extract HP glacial lakes from CWC PDF
+├── tests/
+│   └── test_scenarios.py       # 18 deterministic validation tests
+├── logs/
+│   └── approvals.jsonl         # human-in-the-loop audit trail (created at runtime)
 ├── requirements.txt
 ├── data/
 │   ├── needs.csv
@@ -124,7 +144,17 @@ ollama pull llama3.2:1b
 ```env
 OLLAMA_BASE_URL=http://localhost:11434
 ORS_API_KEY=your_key
+AGENT_COORDINATOR_EMAIL=your_email@example.com
 ```
+
+For the Streamlit demo, enter these directly in the sidebar:
+
+- `Agent coordinator email`
+- `User email`
+- `SMTP password`
+
+The app uses Gmail SMTP with hardcoded defaults (`smtp.gmail.com:587`, TLS).
+Use a Gmail app password for the sender account.
 
 4. Build the vector database:
 
@@ -136,6 +166,12 @@ python3 scripts/ingest.py --overwrite
 
 ```bash
 streamlit run app/app.py
+```
+
+6. (Optional) Run the validation test suite:
+
+```bash
+pytest -q          # 18 deterministic scenario tests
 ```
 
 ## Sample Inputs and Outputs
@@ -157,14 +193,23 @@ Expected output:
 
 ## Validation / Evaluation
 
-Validation artifacts are included in `docs/evaluation.md`. The project evaluates:
+Validation artifacts are included in `docs/evaluation.md`, plus an automated
+suite in `tests/test_scenarios.py` (**18 passing** deterministic tests). The
+project evaluates:
 
 - whether a relevant resource is returned
 - whether escalation is triggered when resources are missing
 - whether the output contains an actionable next step
 - whether the response remains understandable to a non-technical user
+- urgency-score bands, volunteer-matching correctness, and the RAG relevance gate
 
-The app also stores a stepwise `node_log` in state, which serves as an agent trace.
+Key measured results (see `docs/evaluation.md`):
+
+- RAG gate: in-scope ≤0.59 vs out-of-scope ≥0.77 cosine distance → **0 false accepts/rejects** at threshold 0.70
+- GLOF extraction: 12 increasing HP lakes — **exactly matches CWC's own reported figure**
+- Volunteer matching: all 5 sample needs matched to the correct provider
+
+The app also stores a stepwise `node_log` in state and a human-decision audit log (`logs/approvals.jsonl`), which serve as agent traces.
 
 ## Results and Insights
 
