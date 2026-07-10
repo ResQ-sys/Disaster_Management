@@ -51,6 +51,7 @@ class DisasterState(TypedDict):
     longitude:       float
     disaster_type:   str          # "Flash Flood" | "Landslide" | "Cloudburst" etc.
     needs:           list[str]    # ["Medical", "Shelter", "Food", "Rescue"]
+    language:        str          # preferred language for AI-generated report text
 
     # ── Enriched Context (Intake Agent fills these) ────────────────
     weather:         dict
@@ -501,26 +502,105 @@ def route_planning_agent(state: DisasterState) -> DisasterState:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Report label translation (Hindi) — deterministic, LLM-free.
+#
+# The report's facts (numbers, alert codes, urgency scores, place names)
+# are built directly here in Python and only ever have their fixed labels
+# translated via this dict. A small local model (llama3.2:1b) asked to
+# translate/regenerate the WHOLE factual report was observed to hallucinate
+# — e.g. reporting a GREEN weather alert as RED. Numbers and codes must
+# never pass through the LLM in a different language than they were
+# computed in. Only the short "Recommendation" paragraph below is
+# LLM-generated (and kept low-stakes: plain-language advice, no figures).
+# ══════════════════════════════════════════════════════════════════════
+_REPORT_LABELS_HI = {
+    "Disaster Response Report": "आपदा प्रतिक्रिया रिपोर्ट",
+    "Situation": "स्थिति",
+    "Person": "व्यक्ति",
+    "Location": "स्थान",
+    "district": "जिला",
+    "Disaster": "आपदा",
+    "Needs": "आवश्यकताएं",
+    "Urgency Score": "तात्कालिकता स्कोर",
+    "Weather": "मौसम",
+    "Forecast rain (24h)": "वर्षा पूर्वानुमान (24 घंटे)",
+    "Alert": "चेतावनी",
+    "District Risk (HIMCOSTE 2023)": "जिला जोखिम (HIMCOSTE 2023)",
+    "Risk Tier": "जोखिम स्तर",
+    "Landslides in 2023": "2023 में भूस्खलन",
+    "Priority Resource": "प्राथमिकता संसाधन",
+    "Name": "नाम",
+    "Type": "प्रकार",
+    "Contact": "संपर्क",
+    "None found — escalation required": "कोई नहीं मिला — आगे बढ़ाना आवश्यक",
+    "Route to Priority Resource": "प्राथमिकता संसाधन तक मार्ग",
+    "Distance": "दूरी",
+    "Duration": "अवधि",
+    "Road warning": "सड़क चेतावनी",
+    "None": "कोई नहीं",
+    "CWC Monitoring": "CWC निगरानी",
+    "Nearest Station": "निकटतम स्टेशन",
+    "Live data": "लाइव डेटा",
+    "GLOF Monitoring (glacial lake outburst risk)": "GLOF निगरानी (हिमानी झील प्रकोप बाढ़ जोखिम)",
+    "No expanding glacial lakes flagged near this location.":
+        "इस स्थान के पास कोई बढ़ती हिमानी झील चिह्नित नहीं।",
+    "Wildfire Proneness": "जंगल की आग की संभावना",
+    "Other Resources Found": "अन्य मिले संसाधन",
+    "Escalation Needed": "आगे बढ़ाना आवश्यक",
+    "Yes": "हाँ", "No": "नहीं",
+    "Reason": "कारण",
+    "Recommendation": "सिफारिश",
+    "NOTE: This is AI-assisted information. Always verify with HPSDMA and "
+    "local authorities. Call 1078 (NDMA) for official support.":
+        "नोट: यह AI-सहायता प्राप्त जानकारी है। हमेशा HPSDMA और स्थानीय अधिकारियों से "
+        "सत्यापित करें। आधिकारिक सहायता हेतु 1078 (NDMA) पर कॉल करें।",
+    "NDMA Helpline": "NDMA हेल्पलाइन",
+    "HP Police": "HP पुलिस",
+    "HP Ambulance (108)": "HP एम्बुलेंस (108)",
+    "Fire": "फायर",
+    "Control Room": "नियंत्रण कक्ष",
+    "Nearest Hospital": "निकटतम अस्पताल",
+}
+
+_CODE_LABELS_HI = {
+    "CRITICAL": "अति गंभीर", "HIGH": "उच्च", "MEDIUM": "मध्यम", "MODERATE": "मध्यम",
+    "LOW": "निम्न", "MINIMAL": "न्यूनतम", "UNKNOWN": "अज्ञात", "N/A": "उपलब्ध नहीं",
+    "RED": "लाल", "ORANGE": "नारंगी", "YELLOW": "पीला", "GREEN": "हरा",
+}
+
+
+def _rl(text: str, language: str) -> str:
+    """Translate a fixed report label (never a data value) to Hindi."""
+    return _REPORT_LABELS_HI.get(text, text) if language == "Hindi" else text
+
+
+def _cl(code, language: str):
+    """Translate a short enum code (risk tier, alert level, ...) to Hindi."""
+    return _CODE_LABELS_HI.get(str(code).upper(), code) if language == "Hindi" else code
+
+
+# ══════════════════════════════════════════════════════════════════════
 # NODE 5 — ESCALATION & REPORT AGENT
 # Role: Generate final structured report; escalate if no resource found
 # ══════════════════════════════════════════════════════════════════════
 def escalation_agent(state: DisasterState) -> DisasterState:
     llm = get_llm()
+    language = state.get("language") or "English"
 
     # HP emergency contacts (always included)
     emergency_contacts = [
-        "NDMA Helpline: 1078",
-        "HP Police: 100",
-        "HP Ambulance (108): 108",
-        "Fire: 101",
-        f"HPSDMA {state['district']} Control Room: 0177-2620131",
-        "NDRF HP: 0172-2749165",
+        f"{_rl('NDMA Helpline', language)}: 1078",
+        f"{_rl('HP Police', language)}: 100",
+        f"{_rl('HP Ambulance (108)', language)}: 108",
+        f"{_rl('Fire', language)}: 101",
+        f"HPSDMA {state['district']} {_rl('Control Room', language)}: 0177-2620131",
+        f"NDRF HP: 0172-2749165",
     ]
 
     # Add top hospital contact
     if state.get("hospitals"):
         h = state["hospitals"][0]
-        emergency_contacts.append(f"Nearest Hospital ({h.get('name')}): {h.get('contact')}")
+        emergency_contacts.append(f"{_rl('Nearest Hospital', language)} ({h.get('name')}): {h.get('contact')}")
 
     escalation_needed = state.get("escalation_needed", False)
     if not state.get("priority_resource"):
@@ -529,63 +609,128 @@ def escalation_agent(state: DisasterState) -> DisasterState:
     # Explainable urgency score (uses final escalation flag)
     urgency = compute_urgency_score({**state, "escalation_needed": escalation_needed})
 
-    system = """You are the Escalation and Report Agent for HP Disaster Relief.
-    Generate a clear, actionable disaster response report.
-    Format: markdown with sections.
-    Be concise, factual, and action-oriented.
-    Always end with: 'NOTE: This is AI-assisted information. Always verify with local authorities.'"""
+    # ── Deterministic facts block — built in Python, never touched by the
+    # LLM, so numbers/codes/names can never be mistranslated or hallucinated.
+    weather = state.get("weather", {}) or {}
+    district_risk = state.get("district_risk", {}) or {}
+    priority = state.get("priority_resource", {}) or {}
+    route = state.get("route", {}) or {}
+    nearest_cwc = state.get("nearest_cwc", {}) or {}
+    glof_alert = state.get("glof_alert", {}) or {}
+    wildfire = state.get("wildfire_risk", {}) or {}
+    other_resources = state.get("matched_resources", [])[1:4]
 
-    prompt = f"""
-Generate a disaster response report:
+    R = lambda k: _rl(k, language)
+    lines = [
+        f"# {R('Disaster Response Report')}",
+        f"## {R('Situation')}",
+        f"- **{R('Person')}:** {state.get('user_name', 'Unknown')}",
+        f"- **{R('Location')}:** {state.get('location_desc')} ({state['district']} {R('district')})",
+        f"- **{R('Disaster')}:** {state['disaster_type']}",
+        f"- **{R('Needs')}:** {', '.join(state.get('needs', []))}",
+        f"- **{R('Urgency Score')}:** {urgency['score']}/100 ({_cl(urgency['level'], language)})",
+        "",
+        f"## {R('Weather')}",
+        f"- {weather.get('description', 'N/A')}",
+        f"- **{R('Forecast rain (24h)')}:** {weather.get('forecast_rain_24h', 'N/A')} mm",
+        f"- **{R('Alert')}:** {_cl(state.get('imd_alert_level', 'N/A'), language)}",
+        "",
+        f"## {R('District Risk (HIMCOSTE 2023)')}",
+        f"- **{R('Risk Tier')}:** {_cl(district_risk.get('risk_tier', 'N/A'), language)}",
+        f"- **{R('Landslides in 2023')}:** {district_risk.get('landslides_2023', 'N/A')}",
+        "",
+        f"## {R('Priority Resource')}",
+    ]
+    if priority:
+        lines += [
+            f"- **{R('Name')}:** {priority.get('name', 'N/A')}",
+            f"- **{R('Type')}:** {priority.get('resource_type', priority.get('type', 'N/A'))}",
+            f"- **{R('Contact')}:** {priority.get('contact', 'N/A')}",
+        ]
+    else:
+        lines.append(f"- {R('None found — escalation required')}")
+    lines += [
+        "",
+        f"## {R('Route to Priority Resource')}",
+        f"- **{R('Distance')}:** {route.get('distance_km', 'N/A')} km",
+        f"- **{R('Duration')}:** {route.get('duration_min', 'N/A')} min",
+        f"- **{R('Road warning')}:** {state.get('route_warning') or R('None')}",
+        "",
+        f"## {R('CWC Monitoring')}",
+        f"- **{R('Nearest Station')}:** {nearest_cwc.get('name', 'N/A')} ({nearest_cwc.get('river', 'N/A')})",
+        f"- **{R('Live data')}:** https://ffs.india-water.gov.in",
+        "",
+        f"## {R('GLOF Monitoring (glacial lake outburst risk)')}",
+    ]
+    if glof_alert:
+        lines.append(f"- {glof_alert.get('message', '')} ({glof_alert.get('disclaimer', '')})")
+    else:
+        lines.append(f"- {R('No expanding glacial lakes flagged near this location.')}")
+    lines += [
+        "",
+        f"## {R('Wildfire Proneness')}",
+        f"- **{_cl(wildfire.get('level', 'N/A'), language)}** — {wildfire.get('message', 'N/A')} "
+        f"({wildfire.get('disclaimer', '')})",
+    ]
+    if other_resources:
+        lines += ["", f"## {R('Other Resources Found')}"]
+        for r in other_resources:
+            lines.append(f"- {r.get('name', 'N/A')} ({r.get('resource_type', r.get('type', 'N/A'))})")
+    lines += [
+        "",
+        f"## {R('Escalation Needed')}",
+        f"- **{R('Yes') if escalation_needed else R('No')}**"
+        + (f" — {R('Reason')}: {state.get('escalation_reason', '')}" if escalation_needed else ""),
+    ]
+    facts_report = "\n".join(lines)
 
-SITUATION:
-- Person: {state.get('user_name', 'Unknown')}
-- Location: {state.get('location_desc')} ({state['district']} district)
-- Disaster: {state['disaster_type']}
-- Needs: {', '.join(state.get('needs', []))}
-- Urgency Score: {urgency['score']}/100 ({urgency['level']}) — factors: {urgency['breakdown']}
+    # ── Short, low-stakes LLM narrative — plain-language advice only, no
+    # figures to get wrong. Kept deliberately short: a small local model
+    # (llama3.2:1b) reliably follows a "write in Hindi" instruction only
+    # on short, focused prompts, not on long structured-data generation.
+    situation_summary = (
+        f"Disaster: {state['disaster_type']} in {state['district']} district. "
+        f"Urgency: {urgency['level']}. Needs: {', '.join(state.get('needs', []))}. "
+        + (f"Nearest resource: {priority.get('name')} ({route.get('distance_km', '?')} km away). "
+           if priority else "No local resource found — escalate to district authorities. ")
+        + ("GLOF risk elevated nearby. " if glof_alert else "")
+        + ("Wildfire-prone area. " if wildfire.get("prone") else "")
+        + (f"Road risk: {state['route_warning']}. " if state.get("route_warning") else "")
+    )
+    if language == "Hindi":
+        narrative_system = (
+            "IMPORTANT: Write your ENTIRE response in Hindi (Devanagari script only). "
+            "Do not use English words.\n"
+            "You are a disaster relief assistant. Given a short situation summary, write "
+            "a brief 3-4 sentence actionable recommendation for the person. Do not restate "
+            "exact numbers; just give clear, plain-language guidance on what to do next."
+        )
+    else:
+        narrative_system = (
+            "You are a disaster relief assistant. Given a short situation summary, write "
+            "a brief 3-4 sentence actionable recommendation for the person. Do not restate "
+            "exact numbers; just give clear, plain-language guidance on what to do next."
+        )
+    try:
+        narrative_resp = llm.invoke([
+            SystemMessage(content=narrative_system),
+            HumanMessage(content=situation_summary),
+        ])
+        narrative = narrative_resp.content.strip()
+    except Exception:
+        narrative = situation_summary  # fallback: still informative, just not prose
 
-WEATHER (Open-Meteo):
-- {state.get('weather', {}).get('description', 'N/A')}
-- Forecast rain 24h: {state.get('weather', {}).get('forecast_rain_24h', 'N/A')} mm
-- Alert: {state.get('imd_alert_level', 'N/A')}
-
-DISTRICT RISK (HIMCOSTE 2023):
-- Risk Tier: {state.get('district_risk', {}).get('risk_tier', 'N/A')}
-- Landslides in 2023: {state.get('district_risk', {}).get('landslides_2023', 'N/A')}
-
-PRIORITY RESOURCE:
-{json.dumps(state.get('priority_resource', {}), indent=2)}
-
-ROUTE:
-- Distance: {state.get('route', {}).get('distance_km', 'N/A')} km
-- Duration: {state.get('route', {}).get('duration_min', 'N/A')} min
-- Warning: {state.get('route_warning', 'None')}
-
-CWC MONITORING:
-- Nearest Station: {state.get('nearest_cwc', {}).get('name', 'N/A')} on {state.get('nearest_cwc', {}).get('river', 'N/A')}
-- Live data: https://ffs.india-water.gov.in
-
-GLOF MONITORING (glacial lake outburst risk):
-{("- " + state['glof_alert']['message'] + " (" + state['glof_alert']['disclaimer'] + ")") if state.get('glof_alert') else "- No expanding glacial lakes flagged near this location."}
-
-WILDFIRE PRONENESS:
-- {state.get('wildfire_risk', {}).get('level', 'N/A')} — {state.get('wildfire_risk', {}).get('message', 'N/A')} ({state.get('wildfire_risk', {}).get('disclaimer', '')})
-
-ALL RESOURCES FOUND:
-{json.dumps(state.get('matched_resources', [])[:3], indent=2)}
-
-ESCALATION NEEDED: {escalation_needed}
-{f"REASON: {state.get('escalation_reason', '')}" if escalation_needed else ""}
-
-Generate the complete response report in markdown.
-"""
-    response = llm.invoke([SystemMessage(content=system), HumanMessage(content=prompt)])
+    note = _rl(
+        "NOTE: This is AI-assisted information. Always verify with HPSDMA and "
+        "local authorities. Call 1078 (NDMA) for official support.",
+        language,
+    )
+    final_report = f"{facts_report}\n\n## {R('Recommendation')}\n\n{narrative}\n\n**{note}**"
 
     return {
         **state,
         "urgency":           urgency,
-        "final_report":      response.content,
+        "final_report":      final_report,
         "llm_model_label":   active_model_label(),
         "escalation_needed": escalation_needed,
         "emergency_contacts": emergency_contacts,
@@ -681,6 +826,7 @@ def make_initial_state(
     longitude: float,
     disaster_type: str,
     needs: list[str],
+    language: str = "English",
 ) -> DisasterState:
     return {
         "user_name":      user_name,
@@ -690,6 +836,7 @@ def make_initial_state(
         "longitude":      longitude,
         "disaster_type":  disaster_type,
         "needs":          needs,
+        "language":       language,
         "weather": {}, "district_risk": {}, "nearest_cwc": {}, "imd_alert_level": "",
         "wildfire_risk": {}, "glacial_lakes": [], "glof_alert": {},
         "hospitals": [], "shelters": [], "cwc_stations": [], "knowledge_chunks": [],
@@ -726,6 +873,7 @@ def stream_agent(
     longitude: float,
     disaster_type: str,
     needs: list[str],
+    language: str = "English",
 ):
     """Yield `(node_name, state_so_far)` as the graph progresses."""
     app = build_graph()
@@ -737,6 +885,7 @@ def stream_agent(
         longitude=longitude,
         disaster_type=disaster_type,
         needs=needs,
+        language=language,
     )
     final_state = dict(state)
     for chunk in app.stream(state, stream_mode="updates"):
@@ -754,7 +903,8 @@ def run_agent(
     latitude:      float,
     longitude:     float,
     disaster_type: str,
-    needs:         list[str]
+    needs:         list[str],
+    language:      str = "English",
 ) -> DisasterState:
     """Run the full LangGraph pipeline and return final state."""
     app = build_graph()
@@ -767,6 +917,7 @@ def run_agent(
         longitude=longitude,
         disaster_type=disaster_type,
         needs=needs,
+        language=language,
     )
 
     final_state = app.invoke(initial_state)

@@ -11,6 +11,7 @@ Tools:
   get_route()             → OpenRouteService driving directions
   check_road_risk()       → Blocked corridor risk check
   get_district_risk()     → HIMCOSTE district risk tier
+  fetch_ndma_alerts()     → NDMA SACHET CAP alert feed (Himachal Pradesh)
 """
 
 import math
@@ -29,7 +30,7 @@ from resq_project.config import (
     CHROMA_DIR, EMBEDDING_MODEL, ORS_API_KEY,
     COLLECTION_HOSPITALS, COLLECTION_SHELTERS, COLLECTION_SCHOOLS,
     COLLECTION_CWC, COLLECTION_KNOWLEDGE, COLLECTION_GLACIAL,
-    OPEN_METEO_BASE_URL, ORS_BASE_URL,
+    OPEN_METEO_BASE_URL, ORS_BASE_URL, NDMA_HP_RSS_URL,
     BLOCKED_CORRIDORS, DISTRICT_RISK, WILDFIRE_CSV,
     HOSPITAL_CSV, GLACIAL_LAKES_CSV
 )
@@ -804,3 +805,106 @@ def assess_wildfire_risk(user_lat: float, user_lon: float) -> dict:
     except Exception as e:
         logger.error(f"Wildfire assessment error: {e}")
         return {"level": "UNKNOWN", "prone": False, "error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TOOL 12 — NDMA SACHET ALERTS (CAP feed, Himachal Pradesh)
+# ══════════════════════════════════════════════════════════════════════
+_CAP_NS = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
+
+
+def _fetch_cap_alert_english(url: str) -> dict:
+    """
+    Fetch one NDMA CAP alert XML (an RSS item's <link>) and return the
+    English-language <cap:info> block's details.
+
+    Each of these CAP alerts publishes one <cap:info> block per language
+    (English as "en-IN", Hindi as "HI") — reading the official English
+    block directly is more accurate than machine-translating the Hindi
+    one, and needs no LLM.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+
+        for info in root.findall("cap:info", _CAP_NS):
+            lang = (info.findtext("cap:language", default="", namespaces=_CAP_NS) or "").strip().lower()
+            if lang.startswith("en"):
+                return {
+                    "headline_en": (info.findtext("cap:headline", default="", namespaces=_CAP_NS) or "").strip(),
+                    "event":       (info.findtext("cap:event", default="", namespaces=_CAP_NS) or "").strip(),
+                    "severity":    (info.findtext("cap:severity", default="", namespaces=_CAP_NS) or "").strip(),
+                    "urgency":     (info.findtext("cap:urgency", default="", namespaces=_CAP_NS) or "").strip(),
+                    "area_desc":   (info.findtext("cap:area/cap:areaDesc", default="", namespaces=_CAP_NS) or "").strip(),
+                    "instruction": (info.findtext("cap:instruction", default="", namespaces=_CAP_NS) or "").strip(),
+                }
+        return {}
+
+    except Exception as e:
+        logger.error(f"CAP alert detail fetch error ({url}): {e}")
+        return {}
+
+
+def fetch_ndma_alerts(days: int = 7) -> list[dict]:
+    """
+    Fetch the live NDMA SACHET CAP alert feed for Himachal Pradesh and
+    return items published in the last `days` days, newest first.
+
+    The RSS feed itself carries Hindi titles; for each item within the
+    window this also fetches the linked CAP alert XML and pulls the
+    official English headline straight from its English <cap:info> block
+    (falling back to the Hindi RSS title only if that lookup fails).
+    """
+    import xml.etree.ElementTree as ET
+    from datetime import datetime, timedelta, timezone
+    from email.utils import parsedate_to_datetime
+
+    try:
+        resp = requests.get(NDMA_HP_RSS_URL, timeout=15)
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        alerts = []
+        for item in root.iter("item"):
+            title = (item.findtext("title") or "").strip()
+            if not title:
+                continue
+
+            pub_raw = item.findtext("pubDate") or ""
+            try:
+                pub_dt = parsedate_to_datetime(pub_raw)
+                if pub_dt.tzinfo is None:
+                    pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if pub_dt < cutoff:
+                continue
+
+            link = (item.findtext("link") or "").strip()
+            detail = _fetch_cap_alert_english(link) if link else {}
+
+            alerts.append({
+                "title":       title,   # original (Hindi) RSS title, kept for reference
+                "title_en":    detail.get("headline_en") or title,
+                "category":    (item.findtext("category") or "").strip(),
+                "author":      (item.findtext("author") or "").strip(),
+                "link":        link,
+                "guid":        (item.findtext("guid") or "").strip(),
+                "pub_date":    pub_dt.isoformat(),
+                "pub_display": pub_dt.strftime("%d %b, %H:%M UTC"),
+                "event":       detail.get("event", ""),
+                "severity":    detail.get("severity", ""),
+                "urgency":     detail.get("urgency", ""),
+                "area_desc":   detail.get("area_desc", ""),
+            })
+
+        alerts.sort(key=lambda a: a["pub_date"], reverse=True)
+        return alerts
+
+    except Exception as e:
+        logger.error(f"NDMA alert feed error: {e}")
+        return []

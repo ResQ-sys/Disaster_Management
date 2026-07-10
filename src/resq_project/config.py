@@ -108,8 +108,32 @@ IMD_ALERTS = {
     "GREEN":  "Normal conditions. No immediate risk.",
 }
 
+# ── Property Damage Assistant ──────────────────────────────────────────
+# HP emergency helplines (verified). Kept as a config constant, not hardcoded
+# inline, so the numbers can be updated in one place.
+HP_EMERGENCY_NUMBERS = {
+    "National Emergency":    "112",
+    "District Control Room": "1077",
+    "State Control Room":    "1070",
+    "Ambulance":             "108",
+}
+
+# Approximate relief under the HP special relief package (announced July
+# 2025). These rates are revised after major disasters — update here (or
+# point RELIEF_RATES_SOURCE at a live/remote feed) rather than hardcoding
+# the amounts anywhere else in the app.
+RELIEF_RATES = {
+    "FULLY_DAMAGED":     {"label": "Fully damaged house",     "amount": 700000, "display": "₹7,00,000"},
+    "PARTIALLY_DAMAGED": {"label": "Partially damaged house", "amount": 100000, "display": "₹1,00,000"},
+    "MINOR":             {"label": "Minor damage",            "amount": None,   "display": "Assessed on-site"},
+}
+RELIEF_RATES_SOURCE = "HP Special Relief Package, July 2025 — revised after major disasters; amounts are approximate until officially verified."
+
 # ── Open-Meteo ─────────────────────────────────────────────────────────
 OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
 # ── OpenRouteService ───────────────────────────────────────────────────
 ORS_BASE_URL = "https://api.openrouteservice.org/v2"
+
+# ── NDMA SACHET — CAP disaster alert feed (Himachal Pradesh) ──────────
+NDMA_HP_RSS_URL = "https://sachet.ndma.gov.in/cap_public_website/rss/rss_himachal.xml"
