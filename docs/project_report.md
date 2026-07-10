@@ -43,13 +43,14 @@ This project addresses that gap with a human-supervised AI assistant that organi
 
 ## System Overview
 
-The system is implemented as a LangGraph workflow with five stages:
+The system is implemented as a LangGraph workflow with six stages:
 
 1. intake agent
-2. resource finder agent
-3. matching agent
-4. route planning agent
-5. escalation/report agent
+2. GLOF monitor agent
+3. resource finder agent
+4. matching agent
+5. route planning agent
+6. escalation/report agent
 
 This design was chosen because the workflow has clear branching. If no relevant resource is found, the system skips route planning and escalates directly.
 

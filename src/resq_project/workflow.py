@@ -1,42 +1,41 @@
 """
-HP Disaster Relief Agent — LangGraph Workflow
+HP Disaster Relief Agent - LangGraph Workflow
 
 WHY LANGGRAPH OVER CREWAI:
-  1. Disaster type creates GENUINE conditional branches:
-       Flash Flood  → CWC station check + river risk
-       Landslide    → HIMCOSTE risk tier + blocked roads
-       GLOF/Avalanche → different escalation path
+  1. Disaster type creates genuine conditional branches:
+       Flash Flood -> CWC station check + river risk
+       Landslide -> HIMCOSTE risk tier + blocked roads
+       GLOF/Avalanche -> different escalation path
   2. State (location, disaster type, found resources, route)
-     must PERSIST and ACCUMULATE across all 5 nodes
-  3. Conditional edges: if no resource found → skip route → go straight to escalation
-  4. Human-in-the-loop possible at the escalation node
+     must persist and accumulate across all 6 nodes
+  3. Conditional edges: if no resource is found -> skip route -> go straight
+     to escalation
+  4. Human-in-the-loop is possible at the escalation node
   LangGraph's explicit state machine gives full control over all of this.
   CrewAI would hide these branches behind sequential task chaining.
 
 Graph Nodes (Agents):
-  intake_agent          → collects user inputs, enriches with weather + district risk
-  resource_finder_agent → queries ChromaDB for hospitals, shelters, CWC stations
-  matching_agent        → scores and ranks resources by type/urgency/distance
-  route_planning_agent  → calls ORS for route + checks NH road risk
-  escalation_agent      → generates final report, flags if no resource found
+  intake_agent -> collects user inputs, enriches with weather + district risk
+  glof_monitor_agent -> flags expanding glacial lakes near the user
+  resource_finder_agent -> queries ChromaDB for hospitals, shelters, CWC stations
+  matching_agent -> scores and ranks resources by type/urgency/distance
+  route_planning_agent -> calls ORS for route + checks NH road risk
+  escalation_agent -> generates final report, flags if no resource found
 """
 
 from typing import TypedDict, Annotated
 import operator
 import json
-from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
 
-from resq_project.config import LLM_MODEL, LLM_TEMPERATURE, OLLAMA_BASE_URL
-from resq_project.tools import (
-    get_weather, query_hospitals, query_shelters,
-    query_cwc_stations, query_knowledge, get_route,
-    check_road_risk, get_district_risk, find_nearest_cwc_station,
-    geocode_place, straight_line_route, query_glacial_lakes,
-    assess_wildfire_risk
-)
+from resq_project.llm_client import active_model_label, create_chat_model
 import re
+
+
+def _tools():
+    from resq_project import tools
+
+    return tools
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -84,6 +83,7 @@ class DisasterState(TypedDict):
     # ── Final Output (Escalation Agent fills these) ────────────────
     urgency:         dict         # explainable urgency score
     final_report:    str
+    llm_model_label: str
     escalation_needed: bool
     escalation_reason: str
     emergency_contacts: list[str]
@@ -97,11 +97,7 @@ class DisasterState(TypedDict):
 # LLM
 # ══════════════════════════════════════════════════════════════════════
 def get_llm():
-    return ChatOllama(
-        model=LLM_MODEL,
-        temperature=LLM_TEMPERATURE,
-        base_url=OLLAMA_BASE_URL,
-    )
+    return create_chat_model()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -144,12 +140,14 @@ def compute_urgency_score(state: "DisasterState") -> dict:
 # Role: Understand the situation; enrich with weather + district risk
 # ══════════════════════════════════════════════════════════════════════
 def intake_agent(state: DisasterState) -> DisasterState:
+    tools = _tools()
+
     # Fetch real-time context
-    weather      = get_weather(state["latitude"], state["longitude"], state["district"])
-    district_risk = get_district_risk(state["district"])
-    nearest_cwc  = find_nearest_cwc_station(state["latitude"], state["longitude"])
-    wildfire_risk = assess_wildfire_risk(state["latitude"], state["longitude"])
-    risk_knowledge = query_knowledge(
+    weather      = tools.get_weather(state["latitude"], state["longitude"], state["district"])
+    district_risk = tools.get_district_risk(state["district"])
+    nearest_cwc  = tools.find_nearest_cwc_station(state["latitude"], state["longitude"])
+    wildfire_risk = tools.assess_wildfire_risk(state["latitude"], state["longitude"])
+    risk_knowledge = tools.query_knowledge(
         f"disaster risk {state['district']} {state['disaster_type']} Himachal Pradesh"
     )
 
@@ -175,9 +173,13 @@ GLOF_SENSITIVE = ("GLOF", "Flash Flood", "Cloudburst")
 
 
 def glof_monitor_agent(state: DisasterState) -> DisasterState:
+    tools = _tools()
+
     district = state["district"]
     disaster = state["disaster_type"]
-    lakes = query_glacial_lakes(district, state["latitude"], state["longitude"], n_results=5)
+    lakes = tools.query_glacial_lakes(
+        district, state["latitude"], state["longitude"], n_results=5
+    )
 
     increasing = [lk for lk in lakes if lk.get("status") == "increase"]
     alert = {}
@@ -228,6 +230,8 @@ def glof_monitor_agent(state: DisasterState) -> DisasterState:
 # Different resources fetched based on disaster type
 # ══════════════════════════════════════════════════════════════════════
 def resource_finder_agent(state: DisasterState) -> DisasterState:
+    tools = _tools()
+
     district      = state["district"]
     needs         = state["needs"]
     disaster_type = state["disaster_type"]
@@ -236,20 +240,20 @@ def resource_finder_agent(state: DisasterState) -> DisasterState:
 
     # Medical need or any injury-risk disaster → fetch hospitals
     if "Medical" in needs or disaster_type in ["Flash Flood", "Landslide", "Cloudburst", "GLOF", "Avalanche", "Wildfire"]:
-        hospitals = query_hospitals(district, need_type="emergency", n_results=5)
+        hospitals = tools.query_hospitals(district, need_type="emergency", n_results=5)
 
     # Shelter need → fetch NULM shelters + schools
     if "Shelter" in needs or disaster_type in ["Flash Flood", "Cloudburst", "Landslide", "Wildfire"]:
-        shelters = query_shelters(district, n_results=5)
+        shelters = tools.query_shelters(district, n_results=5)
 
     # Flood/GLOF → CWC station data critical
     if disaster_type in ["Flash Flood", "GLOF", "Cloudburst"]:
         river = state.get("nearest_cwc", {}).get("river", "")
-        cwc_stations = query_cwc_stations(district, river=river, n_results=3)
+        cwc_stations = tools.query_cwc_stations(district, river=river, n_results=3)
 
     # Additional contextual knowledge
     know_query = f"{disaster_type} response resources {district} Himachal Pradesh relief"
-    extra_knowledge = query_knowledge(know_query, n_results=3)
+    extra_knowledge = tools.query_knowledge(know_query, n_results=3)
 
     # Merge with existing knowledge chunks
     all_knowledge = list(set(state.get("knowledge_chunks", []) + extra_knowledge))
@@ -367,6 +371,8 @@ def _extract_place(name: str) -> str:
 
 
 def _resolve_dest(resource, name, district, center):
+    tools = _tools()
+
     """Best-effort (lat, lon, source) for a resource — approximate is fine.
 
     Ladder: resource coords → geocode full name → geocode the town in the
@@ -380,13 +386,13 @@ def _resolve_dest(resource, name, district, center):
     except (TypeError, ValueError):
         pass
 
-    geo = geocode_place(f"{name}, {district.title()}, Himachal Pradesh, India")
+    geo = tools.geocode_place(f"{name}, {district.title()}, Himachal Pradesh, India")
     if geo:
         return geo[0], geo[1], "geocoded resource"
 
     place = _extract_place(name)
     if place:
-        geo = geocode_place(f"{place}, {district.title()}, Himachal Pradesh, India")
+        geo = tools.geocode_place(f"{place}, {district.title()}, Himachal Pradesh, India")
         if geo:
             return geo[0], geo[1], f"approx · {place}"
 
@@ -394,6 +400,8 @@ def _resolve_dest(resource, name, district, center):
 
 
 def _route_to_resource(resource, user_lat, user_lon, district, center):
+    tools = _tools()
+
     """Compute an (approximate) route from the user's location to a resource.
 
     Resolves a best-effort destination, then uses ORS road routing when
@@ -416,10 +424,10 @@ def _route_to_resource(resource, user_lat, user_lon, district, center):
             "source":       "same_locality",
         }
     else:
-        route = get_route(user_lat, user_lon, d_lat, d_lon)
+        route = tools.get_route(user_lat, user_lon, d_lat, d_lon)
         # ORS unavailable/failed → approximate straight-line so a number shows.
         if route.get("distance_km") is None:
-            route = straight_line_route(user_lat, user_lon, d_lat, d_lon)
+            route = tools.straight_line_route(user_lat, user_lon, d_lat, d_lon)
 
     route["name"]          = name
     route["resource_type"] = resource.get("resource_type", resource.get("type", "RESOURCE"))
@@ -430,12 +438,14 @@ def _route_to_resource(resource, user_lat, user_lon, district, center):
 
 
 def route_planning_agent(state: DisasterState) -> DisasterState:
+    tools = _tools()
+
     priority    = state.get("priority_resource", {})
     district    = state["district"]
     disaster    = state["disaster_type"]
 
     # Check NH corridor risk for this district
-    road_risks = check_road_risk(district)
+    road_risks = tools.check_road_risk(district)
 
     # If no priority resource, skip routing
     if not priority:
@@ -576,6 +586,7 @@ Generate the complete response report in markdown.
         **state,
         "urgency":           urgency,
         "final_report":      response.content,
+        "llm_model_label":   active_model_label(),
         "escalation_needed": escalation_needed,
         "emergency_contacts": emergency_contacts,
         "node_log": [
@@ -615,6 +626,8 @@ def disaster_type_router(state: DisasterState) -> str:
 # BUILD THE GRAPH
 # ══════════════════════════════════════════════════════════════════════
 def build_graph():
+    from langgraph.graph import END, StateGraph
+
     graph = StateGraph(DisasterState)
 
     # Add nodes
@@ -660,6 +673,79 @@ def build_graph():
     return graph.compile()
 
 
+def make_initial_state(
+    user_name: str,
+    district: str,
+    location_desc: str,
+    latitude: float,
+    longitude: float,
+    disaster_type: str,
+    needs: list[str],
+) -> DisasterState:
+    return {
+        "user_name":      user_name,
+        "district":       district,
+        "location_desc":  location_desc,
+        "latitude":       latitude,
+        "longitude":      longitude,
+        "disaster_type":  disaster_type,
+        "needs":          needs,
+        "weather": {}, "district_risk": {}, "nearest_cwc": {}, "imd_alert_level": "",
+        "wildfire_risk": {}, "glacial_lakes": [], "glof_alert": {},
+        "hospitals": [], "shelters": [], "cwc_stations": [], "knowledge_chunks": [],
+        "matched_resources": [], "priority_resource": {}, "match_reasoning": "",
+        "route": {}, "routes": [], "road_risks": [], "route_warning": "",
+        "urgency": {}, "final_report": "", "llm_model_label": active_model_label(), "escalation_needed": False,
+        "escalation_reason": "", "emergency_contacts": [],
+        "error_log": [], "node_log": [],
+    }
+
+
+# Channels declared with an operator.add reducer: in "updates" stream mode a
+# node's delta carries only its NEW entries for these keys, so a plain
+# dict.update() would wipe the accumulated history — merge them instead.
+_ACCUMULATED_CHANNELS = ("node_log", "error_log")
+
+
+def merge_stream_delta(state: dict, delta: dict) -> dict:
+    """Apply a stream_mode="updates" delta to a running state copy, appending
+    reducer channels (node_log/error_log) and overwriting everything else."""
+    for key, value in delta.items():
+        if key in _ACCUMULATED_CHANNELS:
+            state[key] = list(state.get(key) or []) + list(value or [])
+        else:
+            state[key] = value
+    return state
+
+
+def stream_agent(
+    user_name: str,
+    district: str,
+    location_desc: str,
+    latitude: float,
+    longitude: float,
+    disaster_type: str,
+    needs: list[str],
+):
+    """Yield `(node_name, state_so_far)` as the graph progresses."""
+    app = build_graph()
+    state = make_initial_state(
+        user_name=user_name,
+        district=district,
+        location_desc=location_desc,
+        latitude=latitude,
+        longitude=longitude,
+        disaster_type=disaster_type,
+        needs=needs,
+    )
+    final_state = dict(state)
+    for chunk in app.stream(state, stream_mode="updates"):
+        for node_name, delta in chunk.items():
+            if delta:
+                merge_stream_delta(final_state, delta)
+            yield node_name, dict(final_state)
+
+
 # ── Convenience runner ─────────────────────────────────────────────────
 def run_agent(
     user_name:     str,
@@ -673,24 +759,15 @@ def run_agent(
     """Run the full LangGraph pipeline and return final state."""
     app = build_graph()
 
-    initial_state: DisasterState = {
-        "user_name":      user_name,
-        "district":       district,
-        "location_desc":  location_desc,
-        "latitude":       latitude,
-        "longitude":      longitude,
-        "disaster_type":  disaster_type,
-        "needs":          needs,
-        # All other fields start empty
-        "weather": {}, "district_risk": {}, "nearest_cwc": {}, "imd_alert_level": "",
-        "wildfire_risk": {}, "glacial_lakes": [], "glof_alert": {},
-        "hospitals": [], "shelters": [], "cwc_stations": [], "knowledge_chunks": [],
-        "matched_resources": [], "priority_resource": {}, "match_reasoning": "",
-        "route": {}, "routes": [], "road_risks": [], "route_warning": "",
-        "urgency": {}, "final_report": "", "escalation_needed": False,
-        "escalation_reason": "", "emergency_contacts": [],
-        "error_log": [], "node_log": [],
-    }
+    initial_state = make_initial_state(
+        user_name=user_name,
+        district=district,
+        location_desc=location_desc,
+        latitude=latitude,
+        longitude=longitude,
+        disaster_type=disaster_type,
+        needs=needs,
+    )
 
     final_state = app.invoke(initial_state)
     return final_state

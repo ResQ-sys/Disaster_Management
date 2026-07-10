@@ -3,6 +3,9 @@ HP Disaster Relief Resource Matching Agent
 Streamlit UI
 """
 
+import html
+import time
+
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
@@ -13,10 +16,47 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from resq_project.config import AGENT_COORDINATOR_EMAIL, DISASTER_TYPES, DISTRICT_RISK
-from resq_project.workflow import run_agent, get_llm
+from resq_project.workflow import run_agent, get_llm, stream_agent
 from resq_project.tools import assess_wildfire_risk
 from resq_project import chatbot
 from resq_project import coordination as coord
+from resq_project import charts
+from resq_project.pdf_report import build_pdf
+from resq_project.llm_client import (
+    active_model_label,
+    active_grok_model,
+    active_ollama_model,
+    active_provider,
+    list_ollama_models,
+    ollama_reachable,
+    provider_ready,
+    set_anthropic_model,
+    set_grok_model,
+    set_ollama_model,
+    set_openai_model,
+    set_provider,
+)
+from resq_project import opsmap
+from resq_project import tweet_triage
+
+STAGE_LABELS = {
+    "intake_agent": "Intake agent · incident parsing and weather intake",
+    "glof_monitor_agent": "GLOF monitor agent · expanding glacial lakes",
+    "resource_finder_agent": "Resource finder agent · hospitals, shelters, CWC stations",
+    "matching_agent": "Matching agent · rank and prioritize resources",
+    "route_planning_agent": "Route planning agent · route and road risk",
+    "escalation_agent": "Escalation/report agent · final response report",
+    "completed": "Complete",
+    "error": "Error",
+}
+STAGE_ORDER = [
+    "intake_agent",
+    "glof_monitor_agent",
+    "resource_finder_agent",
+    "matching_agent",
+    "route_planning_agent",
+    "escalation_agent",
+]
 
 
 @st.cache_data(show_spinner=False)
@@ -25,9 +65,36 @@ def wildfire_flag(lat, lon):
     return assess_wildfire_risk(lat, lon)
 
 
+@st.cache_data(show_spinner=False)
+def locate_place(text: str):
+    """Cached town-level locator for need/resource locations (ops map)."""
+    return opsmap.locate(text)
+
+
 def rag_answer(question):
     """Grounded RAG answer over the ingested HP disaster data."""
     return chatbot.answer(question, get_llm)
+
+
+def stage_label(node_name: str) -> str:
+    return STAGE_LABELS.get(node_name, node_name.replace("_", " ").title())
+
+
+def stage_node_html(node_name: str) -> str:
+    return f"<span class='node-trace'>{html.escape(node_name)}</span>"
+
+
+def stage_completion_html(prefix: str, node_name: str, label: str, elapsed_s: float, step_num: int | None = None) -> str:
+    return f"<span class='node-trace'>{html.escape(prefix)} {html.escape(node_name)}</span>"
+
+
+def render_count_fallback(title: str, counts: dict, x_label: str = "Value") -> None:
+    st.markdown(f"**{title}**")
+    if not counts:
+        st.info("No data available.")
+        return
+    chart_rows = [{"Label": key, x_label: value} for key, value in counts.items()]
+    st.dataframe(chart_rows, width="stretch", hide_index=True)
 
 # ── Page config ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -35,6 +102,50 @@ st.set_page_config(
     page_icon="🏔️",
     layout="wide"
 )
+
+st.markdown("""
+<style>
+  html, body, [class*="css"], .stMarkdown, .stMarkdown p { font-size: 1.14rem; }
+  .block-container { padding-top: 1.6rem; padding-bottom: 2rem; }
+  .hero {
+    background:
+      radial-gradient(circle at top right, rgba(245,166,35,.18), transparent 32%),
+      linear-gradient(135deg, #102a43 0%, #1a4b5f 52%, #168a7a 100%);
+    padding: 1.5rem 1.8rem;
+    border-radius: 20px;
+    color: white;
+    box-shadow: 0 12px 30px rgba(16,42,67,.22);
+    margin-bottom: 1.1rem;
+  }
+  .hero h1 { color: #fff; font-size: 2.75rem; margin: 0 0 .25rem 0; font-weight: 850; letter-spacing: -.03em; }
+  .hero p { color: #d7e7ee; margin: 0; font-size: 1.14rem; }
+  .hero .meta { color: #b8d4da; font-size: 1.08rem; margin-top: .45rem; }
+  .hero-grid {
+    display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:.65rem; margin-top: 1rem;
+  }
+  .hero-chip {
+    background: rgba(255,255,255,.1);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    padding: .7rem .8rem;
+  }
+  .hero-chip strong { display:block; color:#fff; font-size:1.08rem; margin-bottom:.12rem; }
+  .hero-chip span { color:#cde3e7; font-size:.98rem; }
+  [data-testid="stMetricValue"] { font-size: 2.4rem; font-weight: 800; }
+  [data-testid="stMetricLabel"] { font-size: 1.12rem; opacity: .88; }
+  .stTabs [data-baseweb="tab"] { font-size: 1.14rem; padding: .7rem 1.05rem; }
+  .stTabs [aria-selected="true"] { font-weight: 700; }
+  .pill {
+    display:inline-block; padding:.26rem .6rem; border-radius:999px; font-size:.82rem; font-weight:700;
+    background:#e7f2ef; color:#125e56; border:1px solid #cbe5df;
+  }
+  .node-trace { color:#168a34; font-weight:800; }
+  .stage-panel {
+    border:1px solid #cbe5df; background:#f4fbf7; border-radius:14px; padding:.9rem 1rem; margin:.2rem 0 .4rem 0;
+  }
+  .stage-panel p { margin:.15rem 0; }
+</style>
+""", unsafe_allow_html=True)
 
 if "agent_state" not in st.session_state:
     st.session_state.agent_state = None
@@ -48,6 +159,29 @@ if "sender_email" not in st.session_state:
     st.session_state.sender_email = ""
 if "smtp_password" not in st.session_state:
     st.session_state.smtp_password = ""
+if "pdf_bytes" not in st.session_state:
+    st.session_state.pdf_bytes = None
+if "agent_stage" not in st.session_state:
+    st.session_state.agent_stage = ""
+if "agent_stage_history" not in st.session_state:
+    st.session_state.agent_stage_history = []
+
+_provider_labels = {
+    "Ollama (local)": "ollama",
+    "OpenAI (API)": "openai",
+    "Anthropic (API)": "anthropic",
+    "Grok (xAI API)": "grok",
+}
+if st.session_state.get("llm_provider_choice") in _provider_labels:
+    set_provider(_provider_labels[st.session_state["llm_provider_choice"]])
+if st.session_state.get("ollama_model_choice"):
+    set_ollama_model(st.session_state["ollama_model_choice"])
+if st.session_state.get("openai_model_choice"):
+    set_openai_model(st.session_state["openai_model_choice"])
+if st.session_state.get("anthropic_model_choice"):
+    set_anthropic_model(st.session_state["anthropic_model_choice"])
+if st.session_state.get("grok_model_choice"):
+    set_grok_model(st.session_state["grok_model_choice"])
 
 # ── Alert color map ────────────────────────────────────────────────────
 ALERT_COLORS = {
@@ -105,19 +239,17 @@ def geocode_location(district: str, location_desc: str):
 # ══════════════════════════════════════════════════════════════════════
 # HEADER
 # ══════════════════════════════════════════════════════════════════════
-st.markdown("""
-<div style='background: linear-gradient(135deg, #1e3a5f 0%, #2d6a4f 100%);
-            padding: 24px 32px; border-radius: 12px; margin-bottom: 24px;'>
-  <h1 style='color:white; margin:0; font-size:28px;'>
-    🏔️ HP Disaster Relief Resource Matching Agent
-  </h1>
-  <p style='color:#a8d5e2; margin:8px 0 0 0; font-size:14px;'>
-    Himachal Pradesh • Multi-hazard: Flood | Landslide | GLOF | Wildfire | Avalanche | Cloudburst
-  </p>
-  <p style='color:#94a3b8; margin:4px 0 0 0; font-size:12px;'>
-    Powered by: LangGraph • Ollama llama3.2:1b • ChromaDB • Open-Meteo •
-    Sources: HIMCOSTE 2023 | CWC | NHP Hospitals | DAY-NULM | HP Education Dept
-  </p>
+st.markdown(f"""
+<div class="hero">
+  <h1>ResQ · Disaster Relief Resource Matching Agent</h1>
+  <p>Himachal Pradesh multi-hazard coordination: one incident report in, one ranked and explainable action plan out.</p>
+  <div class="meta">LangGraph · ChromaDB / fallback retrieval · Open-Meteo · OpenRouteService · Human approval gate · Active model: {active_model_label()}</div>
+  <div class="hero-grid">
+    <div class="hero-chip"><strong>Decision support</strong><span>Never auto-dispatches outbound action</span></div>
+    <div class="hero-chip"><strong>Explainable urgency</strong><span>0–100 score with factor breakdown</span></div>
+    <div class="hero-chip"><strong>Grounded retrieval</strong><span>Hospitals, shelters, CWC, GLOF and wildfire context</span></div>
+    <div class="hero-chip"><strong>Coordination-ready</strong><span>Approve-before-send draft emails with audit log</span></div>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -144,8 +276,8 @@ with st.expander("💬 Ask the HP Disaster Assistant (grounded RAG chatbot)", ex
             label_visibility="collapsed",
         )
         col_send, col_clear = st.columns([1, 1])
-        send = col_send.form_submit_button("Ask ➤", use_container_width=True)
-        clear = col_clear.form_submit_button("🗑️ Clear chat", use_container_width=True)
+        send = col_send.form_submit_button("Ask ➤", width="stretch")
+        clear = col_clear.form_submit_button("🗑️ Clear chat", width="stretch")
 
     if clear:
         st.session_state.chat_history = []
@@ -190,9 +322,22 @@ with st.expander("🤝 Volunteer Need–Resource Matching & Coordination (human-
         st.session_state.extra_needs.append(coord.extract_need_from_text(msg_text))
         st.rerun()
 
+    # Batch triage: pull the disaster-tweet feed into the worklist
+    tcol1, tcol2 = st.columns([1, 2])
+    if tcol1.button("📨 Load tweet feed (batch triage)", width="stretch"):
+        known = {n.get("request_id") for n in st.session_state.extra_needs}
+        st.session_state.extra_needs.extend(
+            n for n in tweet_triage.triage_tweets() if n["request_id"] not in known)
+        st.rerun()
+    tcol2.caption(
+        "Converts `data/disaster_tweets_sample.csv` (Kaggle Disaster Tweets style) into "
+        "structured needs via the extraction pipeline — see `docs/extraction_eval.md` for "
+        "measured accuracy."
+    )
+
     needs = coord.load_needs() + st.session_state.extra_needs
-    resources = coord.load_resources()
-    matches = coord.match_needs_to_resources(needs, resources)
+    resources = coord.load_resources()          # quantities already net of dispatch ledger
+    matches = coord.match_needs_to_resources(needs, resources, allocate=True)
 
     st.markdown(f"**Worklist — {len(matches)} needs** "
                 f"({sum(1 for m in matches if m['status']=='MATCHED')} matched, "
@@ -212,11 +357,14 @@ with st.expander("🤝 Volunteer Need–Resource Matching & Coordination (human-
         with st.container(border=True):
             st.markdown(f"**{title}**")
             if best:
-                bcol = st.columns(4)
+                bcol = st.columns(5)
                 bcol[0].metric("Match score", f"{best['score']}/100")
                 bcol[1].metric("Coverage", f"{best.get('coverage_pct',0)}%")
                 bcol[2].metric("Gap", best.get("quantity_gap", 0))
-                bcol[3].metric("Provider verified",
+                bcol[3].metric("Reserved units", best.get("committed_units", 0),
+                               help="Units held for this need from the provider's remaining stock "
+                                    "(inventory-aware allocation — no double-promising).")
+                bcol[4].metric("Provider verified",
                                "Yes" if str(best['resource'].get('contact_status','')).lower()=="verified" else "No")
 
             draft = coord.draft_coordination_message(
@@ -225,7 +373,7 @@ with st.expander("🤝 Volunteer Need–Resource Matching & Coordination (human-
                                   height=200, key=f"msg_{rid}")
 
             a1, a2, a3 = st.columns(3)
-            if a1.button("✅ Approve & mark sent", key=f"send_{rid}", use_container_width=True):
+            if a1.button("✅ Approve & mark sent", key=f"send_{rid}", width="stretch"):
                 subject = (
                     f"Disaster coordination approval needed: {need.get('category')} "
                     f"request {rid}"
@@ -244,23 +392,45 @@ with st.expander("🤝 Volunteer Need–Resource Matching & Coordination (human-
                                         "coordinator_email": st.session_state.agent_coordinator_email,
                                         "message": edited,
                                         "edited": edited != draft})
+                    # Consume the provider's stock so later matches see it
+                    units = (best or {}).get("committed_units", 0)
+                    if best and units:
+                        coord.log_dispatch({
+                            "request_id": rid,
+                            "resource_id": best["resource"].get("resource_id", ""),
+                            "provider": best["resource"].get("provider_name", ""),
+                            "category": need.get("category"),
+                            "units": units,
+                        })
                     st.session_state.approved_msgs[rid] = "sent"
                     st.rerun()
                 st.error(f"Email send failed: {result['error']}")
-            if a2.button("📝 Log edit (no send)", key=f"edit_{rid}", use_container_width=True):
+            if a2.button("📝 Log edit (no send)", key=f"edit_{rid}", width="stretch"):
                 coord.log_approval({"request_id": rid, "action": "edited",
                                     "category": need.get("category"),
                                     "coordinator_email": st.session_state.agent_coordinator_email,
                                     "message": edited})
                 st.session_state.approved_msgs[rid] = "approved"
                 st.rerun()
-            if a3.button("🚫 Reject / escalate", key=f"rej_{rid}", use_container_width=True):
+            if a3.button("🚫 Reject / escalate", key=f"rej_{rid}", width="stretch"):
                 coord.log_approval({"request_id": rid, "action": "rejected",
                                     "category": need.get("category"),
                                     "coordinator_email": st.session_state.agent_coordinator_email,
                                     "reason": "human rejected"})
                 st.session_state.approved_msgs[rid] = "rejected"
                 st.rerun()
+
+    # Provider inventory (net of dispatch ledger)
+    st.markdown("---")
+    st.markdown("**📦 Provider inventory** — listed stock minus approved dispatches")
+    st.dataframe(
+        [{
+            "Provider": r.get("provider_name"), "Category": r.get("category"),
+            "Location": r.get("location"), "Listed": r.get("quantity_original", 0),
+            "Dispatched": r.get("dispatched_units", 0), "Remaining": r.get("quantity", 0),
+        } for r in resources],
+        width="stretch", hide_index=True,
+    )
 
     # Audit trail
     approvals = coord.read_approvals(limit=20)
@@ -273,9 +443,103 @@ with st.expander("🤝 Volunteer Need–Resource Matching & Coordination (human-
                        f"{'· ✏️ edited' if a.get('edited') else ''}")
 
 # ══════════════════════════════════════════════════════════════════════
+# OPERATIONS MAP — every need, provider, and allocation on one picture
+# ══════════════════════════════════════════════════════════════════════
+with st.expander("🗺️ Operations Map — needs, providers & allocations", expanded=False):
+    st.caption(
+        "Control-room picture: every open **need** (colored by match status), every "
+        "**provider** (blue), and dashed lines showing the current best allocation. "
+        "Town-level accuracy from an offline gazetteer (OSM geocoding as fallback)."
+    )
+    STATUS_MAP_COLOR = {"MATCHED": "green", "PARTIAL": "orange", "UNMATCHED": "red"}
+
+    ops_map = folium.Map(location=[31.7, 77.0], zoom_start=8, tiles="CartoDB positron")
+
+    provider_pts = {}
+    for r in resources:
+        loc = locate_place(str(r.get("location", "")))
+        if not loc:
+            continue
+        provider_pts[str(r.get("resource_id", ""))] = (loc[0], loc[1])
+        folium.Marker(
+            [loc[0], loc[1]],
+            popup=(f"<b>{r.get('provider_name')}</b><br>{r.get('category')} · "
+                   f"remaining {r.get('quantity', 0)} / {r.get('quantity_original', 0)}"),
+            icon=folium.Icon(color="blue", icon="briefcase"),
+        ).add_to(ops_map)
+
+    plotted_needs = 0
+    for m in matches:
+        need = m["need"]
+        loc = locate_place(str(need.get("location", "")))
+        if not loc:
+            continue
+        plotted_needs += 1
+        color = STATUS_MAP_COLOR.get(m["status"], "gray")
+        folium.CircleMarker(
+            location=[loc[0], loc[1]], radius=8,
+            color=color, fill=True, fill_color=color, fill_opacity=0.8,
+            popup=(f"<b>{need.get('request_id')}</b> · {need.get('category')} × "
+                   f"{need.get('quantity') or '?'}<br>{need.get('urgency')} · {m['status']}"),
+        ).add_to(ops_map)
+        best = m.get("best_match")
+        if best:
+            ppt = provider_pts.get(str(best["resource"].get("resource_id", "")))
+            if ppt:
+                folium.PolyLine(
+                    [[loc[0], loc[1]], list(ppt)],
+                    color=color, weight=2, opacity=0.65, dash_array="6",
+                ).add_to(ops_map)
+
+    st_folium(ops_map, width=900, height=450)
+    st.caption(
+        f"{plotted_needs} needs and {len(provider_pts)} providers plotted · "
+        f"🟢 matched · 🟠 partial · 🔴 unmatched · dashed line = proposed allocation"
+    )
+
+# ══════════════════════════════════════════════════════════════════════
 # SIDEBAR — INPUTS
 # ══════════════════════════════════════════════════════════════════════
 with st.sidebar:
+    st.markdown("### Model Control")
+    provider_options = _provider_labels
+    provider_labels = list(provider_options.keys())
+    current_provider = active_provider()
+    current_index = next((i for i, label in enumerate(provider_labels) if provider_options[label] == current_provider), 0)
+    provider_label = st.selectbox("LLM Provider", provider_labels, index=current_index, key="llm_provider_choice")
+    selected_provider = provider_options[provider_label]
+    set_provider(selected_provider)
+
+    if selected_provider == "ollama":
+        installed_models = list_ollama_models()
+        model_options = installed_models or [active_ollama_model()]
+        model_index = model_options.index(active_ollama_model()) if active_ollama_model() in model_options else 0
+        ollama_model = st.selectbox("Ollama model", model_options, index=model_index, key="ollama_model_choice")
+        set_ollama_model(ollama_model)
+        if provider_ready("ollama"):
+            st.caption(f"Ollama reachable · model `{ollama_model}`")
+        else:
+            st.warning("Ollama is not reachable right now. The workflow will fail until the local server is available.")
+    elif selected_provider == "openai":
+        openai_model = st.text_input("OpenAI model", value="gpt-4o-mini", key="openai_model_choice")
+        set_openai_model(openai_model)
+        st.caption("Requires `OPENAI_API_KEY` in the environment.")
+        if not provider_ready("openai"):
+            st.warning("OpenAI provider selected but `OPENAI_API_KEY` is not set.")
+    elif selected_provider == "anthropic":
+        anthropic_model = st.text_input("Anthropic model", value="claude-3-5-sonnet-latest", key="anthropic_model_choice")
+        set_anthropic_model(anthropic_model)
+        st.caption("Requires `ANTHROPIC_API_KEY` in the environment.")
+        if not provider_ready("anthropic"):
+            st.warning("Anthropic provider selected but `ANTHROPIC_API_KEY` is not set.")
+    else:
+        grok_model = st.text_input("Grok model", value=active_grok_model(), key="grok_model_choice")
+        set_grok_model(grok_model)
+        st.caption("Requires `XAI_API_KEY` in the environment. Uses xAI's OpenAI-compatible API without reasoning options enabled.")
+        if not provider_ready("grok"):
+            st.warning("Grok provider selected but `XAI_API_KEY` is not set.")
+
+    st.markdown("---")
     st.markdown("### 📋 Situation Details")
     st.markdown("---")
 
@@ -340,7 +604,8 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    run_btn = st.button("🚨 Find Relief Resources", type="primary", use_container_width=True)
+    run_btn = st.button("🚨 Find Relief Resources", type="primary", width="stretch")
+    st.caption(f"Active provider: `{active_provider()}` · Active model: `{active_model_label()}`")
     st.markdown("---")
 
     # Quick reference
@@ -379,26 +644,78 @@ if run_btn:
         st.session_state.agent_error = "⚠️ Please fill in District, Disaster Type, and at least one Need."
         st.session_state.agent_state = None
     else:
-        with st.spinner("🔄 Running disaster response pipeline... (6 LangGraph nodes)"):
-            try:
-                st.session_state.agent_state = run_agent(
-                    user_name=user_name or "Anonymous",
-                    district=district,
-                    location_desc=location_desc or f"{district}, HP",
-                    latitude=latitude,
-                    longitude=longitude,
-                    disaster_type=disaster_type,
-                    needs=needs
+        ordered_nodes = list(STAGE_ORDER)
+        progress = st.progress(0.0, text="Starting LangGraph pipeline…")
+        stage_box = st.empty()
+        try:
+            final_state = None
+            stage_history = []
+            run_started = time.perf_counter()
+            for node_name, partial_state in stream_agent(
+                user_name=user_name or "Anonymous",
+                district=district,
+                location_desc=location_desc or f"{district}, HP",
+                latitude=latitude,
+                longitude=longitude,
+                disaster_type=disaster_type,
+                needs=needs,
+            ):
+                final_state = partial_state
+                st.session_state.agent_stage = node_name
+                step_num = ordered_nodes.index(node_name) + 1 if node_name in ordered_nodes else 1
+                label = stage_label(node_name)
+                elapsed = time.perf_counter() - run_started
+                stage_history.append({
+                    "node": node_name,
+                    "label": label,
+                    "elapsed_s": round(elapsed, 2),
+                    "step_num": step_num,
+                })
+                st.session_state.agent_stage_history = stage_history
+                stage_box.markdown(
+                    "<div class='stage-panel'>"
+                    + "".join(
+                        f"<p>{stage_completion_html('✓', item['node'], item['label'], item['elapsed_s'], item['step_num'])}</p>"
+                        for item in stage_history
+                    )
+                    + "</div>",
+                    unsafe_allow_html=True,
                 )
-                st.session_state.agent_error = None
-            except Exception as e:
-                st.session_state.agent_error = f"Agent error: {e}"
-                st.session_state.agent_state = None
+                progress.progress(step_num / len(ordered_nodes), text=f"Stage {step_num}/{len(ordered_nodes)} · {label}")
+
+            if final_state is None:
+                raise RuntimeError("Pipeline did not return any stage updates.")
+
+            st.session_state.agent_state = final_state
+            st.session_state.agent_error = None
+            st.session_state.agent_stage = "completed"
+            st.session_state.agent_stage_history = stage_history
+            progress.progress(1.0, text="All node stages completed")
+            stage_box.markdown(
+                "<div class='stage-panel'>"
+                + "".join(
+                    f"<p>{stage_completion_html('✓', item['node'], item['label'], item['elapsed_s'], item['step_num'])}</p>"
+                    for item in stage_history
+                )
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        except Exception as e:
+            st.session_state.agent_error = f"Agent error: {e}"
+            st.session_state.agent_state = None
+            st.session_state.agent_stage = "error"
+            st.session_state.agent_stage_history = []
+            progress.empty()
+            stage_box.empty()
 
 if st.session_state.agent_error:
     st.error(st.session_state.agent_error)
 
 state = st.session_state.agent_state
+current_needs = coord.load_needs()
+current_resources = coord.load_resources()
+volunteer_matches = coord.match_needs_to_resources(current_needs, current_resources)
+recent_approvals = coord.read_approvals(limit=50)
 
 if state is None:
     # Default view: HP map
@@ -431,6 +748,29 @@ else:
     # ══════════════════════════════════════════════════════════════════
     # RESULTS DISPLAY
     # ══════════════════════════════════════════════════════════════════
+    st.markdown(
+        f"<span class='pill'>Pipeline stage: {stage_label(st.session_state.get('agent_stage', 'completed'))}</span>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("")
+    stage_history = st.session_state.get("agent_stage_history", [])
+    if stage_history:
+        with st.expander("Pipeline stage timings", expanded=False):
+            for item in stage_history:
+                st.markdown(
+                    stage_completion_html("", item["node"], item["label"], item["elapsed_s"], item["step_num"]),
+                    unsafe_allow_html=True,
+                )
+            st.dataframe(
+                [{
+                    "Stage": item["step_num"],
+                    "Node": item["node"],
+                    "Label": item["label"],
+                    "Elapsed (s)": item["elapsed_s"],
+                } for item in stage_history],
+                width="stretch",
+                hide_index=True,
+            )
 
     # ── Top metrics row ──────────────────────────────────────────────
     weather      = state.get("weather", {})
@@ -479,10 +819,44 @@ else:
 
     st.markdown("---")
 
+    # ── Executive analytics strip ────────────────────────────────────
+    cards = charts.incident_summary_cards(state, volunteer_matches, recent_approvals)
+    exec_cols = st.columns(3)
+    for col, (title, value, subtitle) in zip(exec_cols, cards[:3]):
+        with col.container(border=True):
+            st.metric(title, value)
+            st.caption(subtitle)
+
+    viz1, viz2, viz3 = st.columns([1.05, 1, 1])
+    with viz1.container(border=True):
+        gauge_fig = charts.plotly_gauge(float(urgency.get("score", 0) or 0), "Incident urgency")
+        if gauge_fig is not None:
+            st.plotly_chart(gauge_fig, width="stretch", key="gauge_exec_strip")
+        else:
+            st.metric("Incident urgency", f"{urgency.get('score', 'N/A')}/100", urgency.get("level", ""))
+    with viz2.container(border=True):
+        status_counts = charts.volunteer_status_counts(volunteer_matches)
+        status_fig = charts.plotly_donut(
+            status_counts,
+            "Volunteer worklist status",
+            charts.STATUS_COLORS,
+        )
+        if status_fig is not None:
+            st.plotly_chart(status_fig, width="stretch", key="status_exec_strip")
+        else:
+            render_count_fallback("Volunteer worklist status", status_counts, "Count")
+    with viz3.container(border=True):
+        risk_fig = charts.plotly_urgency_mix(state)
+        if risk_fig is not None:
+            st.plotly_chart(risk_fig, width="stretch", key="risk_exec_strip")
+        else:
+            breakdown = (state.get("urgency") or {}).get("breakdown", {})
+            render_count_fallback("Urgency driver mix", breakdown, "Points")
+
     # ── Tabs ─────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📋 Response Report", "🏥 Resources", "🗺️ Route & Map",
-        "🌊 CWC Stations", "🧊 GLOF Watch", "⚙️ Agent Log"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "📋 Response Report", "📊 Analytics", "🏥 Resources", "🗺️ Route & Map",
+        "🌊 CWC Stations", "🧊 GLOF Watch", "🧾 Export", "⚙️ Agent Log"
     ])
 
     # ── TAB 1: Final Report ──────────────────────────────────────────
@@ -530,7 +904,7 @@ else:
         edited = st.text_area("Coordination message (editable)", value=draft, height=200,
                               key=f"agentmsg_{agent_rid}")
         ac1, ac2 = st.columns(2)
-        if ac1.button("✅ Approve & mark sent", key=f"agentsend_{agent_rid}", use_container_width=True):
+        if ac1.button("✅ Approve & mark sent", key=f"agentsend_{agent_rid}", width="stretch"):
             subject = (
                 f"Disaster coordination approval needed: {state.get('disaster_type','Incident')} "
                 f"{agent_rid}"
@@ -551,7 +925,7 @@ else:
                 st.session_state.setdefault("approved_msgs", {})[agent_rid] = "sent"
                 st.rerun()
             st.error(f"Email send failed: {result['error']}")
-        if ac2.button("🚫 Reject / escalate", key=f"agentrej_{agent_rid}", use_container_width=True):
+        if ac2.button("🚫 Reject / escalate", key=f"agentrej_{agent_rid}", width="stretch"):
             coord.log_approval({"request_id": agent_rid, "action": "rejected",
                                 "coordinator_email": st.session_state.agent_coordinator_email,
                                 "reason": "human rejected"})
@@ -562,8 +936,166 @@ else:
 
         st.warning("⚠️ NOTE: This is AI-assisted disaster information. Always verify with HPSDMA and local authorities. Call 1078 (NDMA) for official support.")
 
-    # ── TAB 2: Resources ─────────────────────────────────────────────
+    # ── TAB 2: Analytics ─────────────────────────────────────────────
     with tab2:
+        st.markdown("### Analytics")
+        top = st.columns([1, 1, 1])
+        with top[0].container(border=True):
+            gauge_fig = charts.plotly_gauge(float(urgency.get("score", 0) or 0), "Incident urgency")
+            if gauge_fig is not None:
+                st.plotly_chart(gauge_fig, width="stretch", key="gauge_analytics_tab")
+            else:
+                st.metric("Incident urgency", f"{urgency.get('score', 'N/A')}/100", urgency.get("level", ""))
+
+        need_mix_counts = charts.volunteer_need_counts(volunteer_matches)
+        if need_mix_counts:
+            with top[1].container(border=True):
+                need_mix_fig = charts.plotly_pie(
+                    need_mix_counts,
+                    "Need categories",
+                    charts.NEED_COLORS,
+                )
+                if need_mix_fig is not None:
+                    st.plotly_chart(need_mix_fig, width="stretch", key="need_mix_analytics_tab")
+                else:
+                    render_count_fallback("Need categories", need_mix_counts, "Count")
+
+        provider_type_counts = charts.provider_type_mix(current_resources)
+        if provider_type_counts:
+            with top[2].container(border=True):
+                provider_mix_fig = charts.plotly_pie(
+                    provider_type_counts,
+                    "Provider mix",
+                    {
+                        "Government": "#0f766e",
+                        "Ngo": "#2563eb",
+                        "Volunteer": "#7c3aed",
+                        "Private": "#ea580c",
+                        "Unknown": "#64748b",
+                    },
+                )
+                if provider_mix_fig is not None:
+                    st.plotly_chart(provider_mix_fig, width="stretch", key="provider_mix_analytics_tab")
+                else:
+                    render_count_fallback("Provider mix", provider_type_counts, "Count")
+
+        mid = st.columns(2)
+        source_counts = charts.need_source_counts(current_needs)
+        if source_counts:
+            with mid[0].container(border=True):
+                source_fig = charts.plotly_pie(
+                    source_counts,
+                    "Need intake sources",
+                    {
+                        "Field Report": "#1565c0",
+                        "Phone Call": "#2e7d32",
+                        "Tweet": "#fb8c00",
+                    },
+                )
+                if source_fig is not None:
+                    st.plotly_chart(source_fig, width="stretch", key="source_analytics_tab")
+                else:
+                    render_count_fallback("Need intake sources", source_counts, "Count")
+
+        status_counts = charts.need_status_counts(current_needs)
+        if status_counts:
+            with mid[1].container(border=True):
+                status_fig = charts.plotly_pie(
+                    status_counts,
+                    "Need lifecycle status",
+                    {
+                        "Open": "#e53935",
+                        "Matched": "#fb8c00",
+                        "Fulfilled": "#2e7d32",
+                        "Unknown": "#607d8b",
+                    },
+                )
+                if status_fig is not None:
+                    st.plotly_chart(status_fig, width="stretch", key="status_analytics_tab")
+                else:
+                    render_count_fallback("Need lifecycle status", status_counts, "Count")
+
+        treemap_fig = charts.plotly_treemap_needs(current_needs)
+        if treemap_fig is not None:
+            with st.container(border=True):
+                st.plotly_chart(treemap_fig, width="stretch", key="treemap_analytics_tab")
+        else:
+            with st.container(border=True):
+                district_counts = charts.district_need_counts(current_needs)
+                render_count_fallback("Demand concentration by district", district_counts, "Open requests")
+
+        flow_left, flow_right = st.columns(2)
+        sunburst_fig = charts.plotly_sunburst_worklist(volunteer_matches)
+        if sunburst_fig is not None:
+            with flow_left.container(border=True):
+                st.plotly_chart(sunburst_fig, width="stretch", key="sunburst_analytics_tab")
+        else:
+            with flow_left.container(border=True):
+                approval_counts = charts.approval_action_counts(recent_approvals)
+                render_count_fallback("Recent human decisions", approval_counts, "Count")
+
+        risk_counts = charts.risk_signal_counts(state)
+        risk_mix_fig = charts.plotly_pie(
+            risk_counts,
+            "Live risk signal mix",
+            {
+                key: (
+                    "#c03a2b" if key.startswith("Urgency:")
+                    else "#ea580c" if key.startswith("Weather:")
+                    else "#7c3aed" if key.startswith("Wildfire:")
+                    else "#0f766e"
+                )
+                for key in risk_counts
+            } if risk_counts else None,
+        )
+        if risk_mix_fig is not None:
+            with flow_right.container(border=True):
+                st.plotly_chart(risk_mix_fig, width="stretch", key="risk_mix_analytics_tab")
+        else:
+            with flow_right.container(border=True):
+                render_count_fallback("Live risk signals", risk_counts, "Signals")
+
+        summary_left, summary_right = st.columns(2)
+        district_counts = charts.district_need_counts(current_needs)
+        if district_counts:
+            with summary_left.container(border=True):
+                district_mix_fig = charts.plotly_pie(
+                    district_counts,
+                    "Demand share by district",
+                    {
+                        "Kullu": "#1d4f91",
+                        "Kangra": "#1565c0",
+                        "Mandi": "#2e7d32",
+                        "Chamba": "#8e24aa",
+                        "Hamirpur": "#fb8c00",
+                        "Una": "#607d8b",
+                    },
+                )
+                if district_mix_fig is not None:
+                    st.plotly_chart(district_mix_fig, width="stretch", key="district_mix_analytics_tab")
+                else:
+                    render_count_fallback("Demand share by district", district_counts, "Open requests")
+
+        approval_counts = charts.approval_action_counts(recent_approvals)
+        if approval_counts:
+            with summary_right.container(border=True):
+                approval_mix_fig = charts.plotly_pie(
+                    approval_counts,
+                    "Human decision split",
+                    {
+                        "approved_sent": "#2e7d32",
+                        "rejected": "#c62828",
+                        "edited_not_sent": "#fb8c00",
+                        "unknown": "#607d8b",
+                    },
+                )
+                if approval_mix_fig is not None:
+                    st.plotly_chart(approval_mix_fig, width="stretch", key="approval_mix_analytics_tab")
+                else:
+                    render_count_fallback("Human decision split", approval_counts, "Count")
+
+    # ── TAB 3: Resources ─────────────────────────────────────────────
+    with tab3:
         priority = state.get("priority_resource", {})
         if priority:
             st.success(f"✅ **Priority Resource: {priority.get('name', 'N/A')}**")
@@ -597,8 +1129,8 @@ else:
         st.markdown("---")
         st.markdown(f"**Matching Reasoning:** {state.get('match_reasoning', 'N/A')}")
 
-    # ── TAB 3: Route & Map ───────────────────────────────────────────
-    with tab3:
+    # ── TAB 4: Route & Map ───────────────────────────────────────────
+    with tab4:
         route = state.get("route", {})
         routes = state.get("routes", [])
         road_risks = state.get("road_risks", [])
@@ -696,8 +1228,8 @@ else:
 
         st_folium(m, width=850, height=400)
 
-    # ── TAB 4: CWC Stations ──────────────────────────────────────────
-    with tab4:
+    # ── TAB 5: CWC Stations ──────────────────────────────────────────
+    with tab5:
         st.markdown("### 🌊 CWC River Monitoring Stations")
         st.markdown(
             "These are official Central Water Commission stations. "
@@ -719,8 +1251,8 @@ else:
                 st.write(f"**Coordinates:** {s.get('latitude')}, {s.get('longitude')}")
                 st.write(f"**Live Data:** {s.get('cwc_url')}")
 
-    # ── TAB 5: GLOF Watch ────────────────────────────────────────────
-    with tab5:
+    # ── TAB 6: GLOF Watch ────────────────────────────────────────────
+    with tab6:
         st.markdown("### 🧊 Glacial Lake Outburst Flood (GLOF) Watch")
         st.info(
             "⏳ **Note:** This data is based on **previous-year monthly satellite "
@@ -779,12 +1311,58 @@ else:
         else:
             st.caption("No glacial-lake monitoring records available for this area.")
 
-    # ── TAB 6: Agent Log ─────────────────────────────────────────────
-    with tab6:
+    # ── TAB 7: Export ────────────────────────────────────────────────
+    with tab7:
+        st.subheader("Exports")
+        st.write("Generate a shareable incident PDF containing the final response report, urgency summary, route/risk notes, volunteer matching snapshot, and recent human decisions.")
+        st.caption("The PDF is built from the live app state and uses the same analytics data shown above.")
+        if st.button("Generate incident PDF", type="primary", width="stretch"):
+            try:
+                st.session_state.pdf_bytes = build_pdf(state, volunteer_matches, recent_approvals)
+                st.success("PDF ready for download.")
+            except Exception as e:
+                st.error(f"PDF generation failed: {e}")
+        if st.session_state.pdf_bytes:
+            st.download_button(
+                "Download incident PDF",
+                data=st.session_state.pdf_bytes,
+                file_name=f"resq_incident_{state.get('district','hp').lower()}.pdf",
+                mime="application/pdf",
+                width="stretch",
+            )
+
+        st.markdown("---")
+        st.write("Presentation artifact")
+        deck_path = Path(__file__).resolve().parents[1] / "docs" / "ResQ_Capstone_Presentation.pptx"
+        if deck_path.exists():
+            with open(deck_path, "rb") as f:
+                st.download_button(
+                    "Download capstone presentation",
+                    data=f.read(),
+                    file_name="ResQ_Capstone_Presentation.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    width="stretch",
+                )
+        else:
+            st.info("Capstone presentation file is not present in this checkout.")
+
+    # ── TAB 8: Agent Log ─────────────────────────────────────────────
+    with tab8:
         st.markdown("### ⚙️ LangGraph Agent Execution Log")
+        if stage_history:
+            st.markdown("**Stage timings**")
+            for item in stage_history:
+                st.markdown(
+                    f"• {stage_completion_html('', item['node'], item['label'], item['elapsed_s'])}",
+                    unsafe_allow_html=True,
+                )
+            st.markdown("---")
         for log in state.get("node_log", []):
             icon = "⚠️" if "⚠" in log else "✅"
-            st.markdown(f"{icon} `{log}`")
+            highlighted = html.escape(log)
+            for node_name in STAGE_ORDER:
+                highlighted = highlighted.replace(node_name, stage_node_html(node_name))
+            st.markdown(f"{icon} {highlighted}", unsafe_allow_html=True)
 
         if state.get("error_log"):
             st.markdown("**Errors:**")

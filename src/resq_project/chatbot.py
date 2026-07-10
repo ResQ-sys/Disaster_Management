@@ -10,13 +10,18 @@ Answers questions STRICTLY from the ingested Himachal Pradesh disaster data
      context and to say "I don't know" if the context is insufficient.
 """
 
+import re
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from resq_project.config import (
     COLLECTION_HOSPITALS, COLLECTION_SHELTERS, COLLECTION_SCHOOLS,
     COLLECTION_CWC, COLLECTION_KNOWLEDGE, COLLECTION_GLACIAL,
 )
-from resq_project.tools import _get_collection
+from resq_project.tools import (
+    _get_collection, query_cwc_stations, query_glacial_lakes,
+    query_hospitals, query_knowledge,
+)
 
 # Collections searched, with a friendly label for citations
 _SEARCH_COLLECTIONS = {
@@ -57,6 +62,87 @@ STRICT RULES:
 """
 
 
+def _tokens(text: str) -> set[str]:
+    toks = set()
+    for tok in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(tok) <= 2:
+            continue
+        if tok.endswith("s") and len(tok) > 4:
+            tok = tok[:-1]
+        toks.add(tok)
+    return toks
+
+
+def _lexical_distance(question: str, doc: str) -> float:
+    q = _tokens(question)
+    d = _tokens(doc)
+    if not q or not d:
+        return 1.0
+    overlap = len(q & d)
+    if overlap == 0:
+        return 1.0
+    return max(0.0, 1 - (overlap / len(q)))
+
+
+def _fallback_retrieve(question: str):
+    q_lower = (question or "").lower()
+    candidates = []
+
+    if any(word in q_lower for word in ["hospital", "medical", "doctor"]):
+        district = "KULLU" if "kullu" in q_lower else ""
+        for row in query_hospitals(district or "KULLU", n_results=TOP_K_PER_COLLECTION):
+            doc = (
+                f"Hospital: {row.get('name')} | District: {row.get('district')} | "
+                f"Type: {row.get('type')} | Contact: {row.get('contact')}"
+            )
+            candidates.append({
+                "doc": doc,
+                "distance": _lexical_distance(question, doc),
+                "label": _SEARCH_COLLECTIONS[COLLECTION_HOSPITALS],
+                "source": "NHP Hospitals (fallback)",
+            })
+
+    if any(word in q_lower for word in ["glof", "glacial", "lake", "spiti", "lahul"]):
+        district = "LAHUL AND SPITI" if ("spiti" in q_lower or "lahul" in q_lower) else ""
+        for row in query_glacial_lakes(district, 32.5, 77.5, n_results=TOP_K_PER_COLLECTION):
+            doc = (
+                f"Glacial lake {row.get('lake_id')} in {row.get('district')} | "
+                f"Status: {row.get('status')} | River: {row.get('river')} | "
+                f"Area change: {row.get('area_pct_change')}%"
+            )
+            candidates.append({
+                "doc": doc,
+                "distance": _lexical_distance(question, doc),
+                "label": _SEARCH_COLLECTIONS[COLLECTION_GLACIAL],
+                "source": "CWC Glacial Lakes (fallback)",
+            })
+
+    if any(word in q_lower for word in ["cwc", "river", "station", "monitoring"]):
+        for row in query_cwc_stations("KULLU", river="Beas", n_results=TOP_K_PER_COLLECTION):
+            doc = (
+                f"CWC station {row.get('station')} | District: {row.get('district')} | "
+                f"River: {row.get('river')} | Type: {row.get('site_type')}"
+            )
+            candidates.append({
+                "doc": doc,
+                "distance": _lexical_distance(question, doc),
+                "label": _SEARCH_COLLECTIONS[COLLECTION_CWC],
+                "source": "CWC River Stations (fallback)",
+            })
+
+    for doc in query_knowledge(question, n_results=TOP_K_PER_COLLECTION):
+        candidates.append({
+            "doc": doc,
+            "distance": _lexical_distance(question, doc),
+            "label": _SEARCH_COLLECTIONS[COLLECTION_KNOWLEDGE],
+            "source": "Disaster Knowledge (fallback)",
+        })
+
+    kept = [c for c in candidates if c["distance"] <= KEEP_MAX_DISTANCE]
+    kept.sort(key=lambda h: h["distance"])
+    return kept[:MAX_CONTEXT_CHUNKS]
+
+
 def retrieve(question: str):
     """Query every collection; return kept chunks sorted by distance."""
     hits = []
@@ -84,7 +170,8 @@ def retrieve(question: str):
             hits.append({"doc": doc, "distance": dist, "label": label, "source": src})
 
     hits.sort(key=lambda h: h["distance"])
-    return hits[:MAX_CONTEXT_CHUNKS]
+    hits = hits[:MAX_CONTEXT_CHUNKS]
+    return hits or _fallback_retrieve(question)
 
 
 def answer(question: str, get_llm) -> dict:

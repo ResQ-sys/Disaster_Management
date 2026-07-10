@@ -1,0 +1,9 @@
+resource_id,provider_name,location,category,quantity,urgency_capacity,contact_status,availability,notes
+R001,Zonal Hospital Kullu,Kullu,Medical,40,Critical,Verified,Available,Emergency beds and trauma support
+R002,Govt Senior Secondary School Manali,Manali,Shelter,80,High,Pending,Can be activated as temporary shelter
+R003,Red Cross Mandi,Mandi,Food,120,Medium,Verified,Available,Dry ration and ready meals
+R004,District Transport Cell Solan,Solan,Transport,6,High,Verified,Available,Mini vehicles for evacuation
+R005,Jal Shakti Support Unit Kangra,Kangra,Water,250,High,Verified,Available,Packaged water and tankers
+R006,Himalayan Volunteer Network,Kullu,Rescue,18,High,Verified,Available,Local trained volunteers available for evacuation and field support
+R007,SEEDS NGO Relief Team,Mandi,Shelter,60,High,Verified,Available,NGO-managed temporary shelter kits and tarpaulins
+R008,Youth Volunteer Collective Solan,Solan,Transport,3,Medium,Pending,Available,Volunteer drivers with small vehicles for local transport

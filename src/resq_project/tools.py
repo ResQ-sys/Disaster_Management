@@ -14,18 +14,24 @@ Tools:
 """
 
 import math
+import csv
 import requests
 from typing import Optional
 from loguru import logger
-import chromadb
-from chromadb.utils import embedding_functions
+try:
+    import chromadb
+    from chromadb.utils import embedding_functions
+except Exception:
+    chromadb = None
+    embedding_functions = None
 
 from resq_project.config import (
     CHROMA_DIR, EMBEDDING_MODEL, ORS_API_KEY,
     COLLECTION_HOSPITALS, COLLECTION_SHELTERS, COLLECTION_SCHOOLS,
     COLLECTION_CWC, COLLECTION_KNOWLEDGE, COLLECTION_GLACIAL,
     OPEN_METEO_BASE_URL, ORS_BASE_URL,
-    BLOCKED_CORRIDORS, DISTRICT_RISK, WILDFIRE_CSV
+    BLOCKED_CORRIDORS, DISTRICT_RISK, WILDFIRE_CSV,
+    HOSPITAL_CSV, GLACIAL_LAKES_CSV
 )
 
 
@@ -35,6 +41,8 @@ _embedding_fn  = None
 
 def _get_client():
     global _chroma_client, _embedding_fn
+    if chromadb is None or embedding_functions is None:
+        raise RuntimeError("ChromaDB dependencies unavailable")
     if _chroma_client is None:
         _chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
         _embedding_fn  = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -45,6 +53,47 @@ def _get_client():
 def _get_collection(name: str):
     client, ef = _get_client()
     return client.get_collection(name, embedding_function=ef)
+
+
+def _is_expected_vector_fallback_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return (
+        "Collection [" in msg and "does not exist" in msg
+    ) or (
+        "ChromaDB dependencies unavailable" in msg
+    )
+
+
+def _log_vector_fallback(tool_name: str, exc: Exception) -> None:
+    if _is_expected_vector_fallback_error(exc):
+        logger.info(f"{tool_name}: vector store unavailable, using fallback data.")
+    else:
+        logger.error(f"{tool_name}: {exc}")
+
+
+def _read_csv_rows(path) -> list[dict]:
+    with open(path, newline="", encoding="utf-8-sig", errors="replace") as f:
+        return [{k: (v if v is not None else "") for k, v in row.items()} for row in csv.DictReader(f)]
+
+
+_FALLBACK_SHELTERS = [
+    {"city": "Kullu", "district": "KULLU", "capacity": 25, "type": "NULM_SHELTER"},
+    {"city": "Manali", "district": "KULLU", "capacity": 28, "type": "NULM_SHELTER"},
+    {"city": "Dharamsala", "district": "KANGRA", "capacity": 50, "type": "NULM_SHELTER"},
+    {"city": "Shimla", "district": "SHIMLA", "capacity": 20, "type": "NULM_SHELTER"},
+]
+
+_FALLBACK_CWC_STATIONS = [
+    {"name": "Pandoh", "district": "MANDI", "river": "Beas", "site_type": "Forecast", "latitude": 31.675, "longitude": 77.050},
+    {"name": "Rampur", "district": "SHIMLA", "river": "Satluj", "site_type": "Gauge", "latitude": 31.449, "longitude": 77.630},
+    {"name": "Dhalpur", "district": "KULLU", "river": "Beas", "site_type": "Gauge", "latitude": 31.958, "longitude": 77.109},
+]
+
+_FALLBACK_KNOWLEDGE = [
+    "Kullu district is vulnerable to flash floods and river-bank exposure along the Beas corridor.",
+    "Lahul and Spiti has glacial-lake and high-mountain hazard exposure; monitor CWC advisories.",
+    "During heavy rain or landslide conditions, verify road status before dispatching relief teams.",
+]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -206,8 +255,25 @@ def query_hospitals(district: str, need_type: str = "emergency", n_results: int 
         return hospitals
 
     except Exception as e:
-        logger.error(f"Hospital query error: {e}")
-        return []
+        _log_vector_fallback("Hospital query fallback", e)
+        try:
+            rows = _read_csv_rows(HOSPITAL_CSV)
+            district_rows = [r for r in rows if str(r.get("District", "")).upper() == district.upper()]
+            picks = district_rows or rows
+            hospitals = []
+            for row in picks[:n_results]:
+                hospitals.append({
+                    "name": row.get("Hospital Name", ""),
+                    "district": str(row.get("District", "")).upper(),
+                    "type": row.get("Hospital Type", ""),
+                    "contact": row.get("Hospital Contact", ""),
+                    "specialities": row.get("Specialities", ""),
+                    "relevance": 1.0 if str(row.get("District", "")).upper() == district.upper() else 0.5,
+                })
+            return hospitals
+        except Exception as fallback_error:
+            logger.error(f"Hospital CSV fallback error: {fallback_error}")
+            return []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -239,7 +305,7 @@ def query_shelters(district: str, n_results: int = 5) -> list[dict]:
                     "source":   "DAY-NULM HP",
                 })
     except Exception as e:
-        logger.error(f"Shelter query error: {e}")
+        _log_vector_fallback("Shelter query fallback", e)
 
     # Government schools as backup shelters
     try:
@@ -260,9 +326,23 @@ def query_shelters(district: str, n_results: int = 5) -> list[dict]:
                     "source":   "HP Education Dept",
                 })
     except Exception as e:
-        logger.error(f"School shelter query error: {e}")
+        _log_vector_fallback("School shelter query fallback", e)
 
-    return results[:n_results]
+    if results:
+        return results[:n_results]
+
+    fallback = []
+    for meta in _FALLBACK_SHELTERS:
+        if meta["district"] == district.upper():
+            fallback.append({
+                "name": f"NULM Shelter - {meta['city']}",
+                "district": meta["district"],
+                "capacity": meta["capacity"],
+                "type": meta["type"],
+                "contact": "Contact District Collector for access",
+                "source": "DAY-NULM HP (fallback)",
+            })
+    return fallback[:n_results]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -303,8 +383,25 @@ def query_cwc_stations(district: str, river: str = "", n_results: int = 3) -> li
         return stations
 
     except Exception as e:
-        logger.error(f"CWC query error: {e}")
-        return []
+        _log_vector_fallback("CWC query fallback", e)
+        river_lower = river.lower()
+        stations = []
+        for meta in _FALLBACK_CWC_STATIONS:
+            if meta["district"] != district.upper():
+                continue
+            if river_lower and river_lower not in str(meta.get("river", "")).lower():
+                continue
+            stations.append({
+                "station": meta["name"],
+                "district": meta["district"],
+                "river": meta["river"],
+                "site_type": meta["site_type"],
+                "latitude": float(meta["latitude"]),
+                "longitude": float(meta["longitude"]),
+                "cwc_url": f"https://ffs.india.gov.in (search: {meta['name']})",
+                "source": "CWC fallback registry",
+            })
+        return stations[:n_results]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -329,8 +426,16 @@ def query_knowledge(query: str, n_results: int = 4) -> list[str]:
         return chunks
 
     except Exception as e:
-        logger.error(f"Knowledge query error: {e}")
-        return []
+        _log_vector_fallback("Knowledge query fallback", e)
+        query_lower = (query or "").lower()
+        scored = []
+        for text in _FALLBACK_KNOWLEDGE:
+            score = sum(1 for token in query_lower.split() if token and token in text.lower())
+            scored.append((score, text))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [f"[Fallback knowledge] {text}" for score, text in scored[:n_results] if score > 0] or [
+            f"[Fallback knowledge] {text}" for text in _FALLBACK_KNOWLEDGE[:n_results]
+        ]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -520,8 +625,14 @@ def find_nearest_cwc_station(user_lat: float, user_lon: float) -> dict:
         return nearest or {"error": "No CWC stations found"}
 
     except Exception as e:
-        logger.error(f"Nearest CWC station error: {e}")
-        return {"error": str(e)}
+        _log_vector_fallback("Nearest CWC station fallback", e)
+        nearest, min_dist = None, float("inf")
+        for meta in _FALLBACK_CWC_STATIONS:
+            dist = _haversine(user_lat, user_lon, float(meta["latitude"]), float(meta["longitude"]))
+            if dist < min_dist:
+                min_dist = dist
+                nearest = {**meta, "distance_km": round(dist, 2)}
+        return nearest or {"error": str(e)}
 
 
 def _haversine(lat1, lon1, lat2, lon2) -> float:
@@ -585,8 +696,41 @@ def query_glacial_lakes(district: str = "", user_lat: float = None,
         return lakes[:n_results]
 
     except Exception as e:
-        logger.error(f"Glacial lake query error: {e}")
-        return []
+        _log_vector_fallback("Glacial lake query fallback", e)
+        try:
+            lakes = []
+            for meta in _read_csv_rows(GLACIAL_LAKES_CSV):
+                try:
+                    llat = float(meta.get("latitude", 0) or 0)
+                    llon = float(meta.get("longitude", 0) or 0)
+                except (TypeError, ValueError):
+                    llat = llon = 0.0
+                dist = None
+                if user_lat is not None and user_lon is not None and llat and llon:
+                    dist = round(_haversine(user_lat, user_lon, llat, llon), 1)
+                lakes.append({
+                    "lake_id": meta.get("lake_id"),
+                    "district": str(meta.get("district", "")).upper(),
+                    "basin": meta.get("basin"),
+                    "river": meta.get("river"),
+                    "latitude": llat,
+                    "longitude": llon,
+                    "status": meta.get("status"),
+                    "area_pct_change": meta.get("area_pct_change"),
+                    "monitored_period": meta.get("monitored_period"),
+                    "distance_km": dist,
+                    "source": meta.get("source"),
+                })
+            d = (district or "").upper()
+            lakes.sort(key=lambda lk: (
+                0 if lk["district"] == d else 1,
+                0 if lk["status"] == "increase" else 1,
+                lk["distance_km"] if lk["distance_km"] is not None else 9e9,
+            ))
+            return lakes[:n_results]
+        except Exception as fallback_error:
+            logger.error(f"Glacial lake CSV fallback error: {fallback_error}")
+            return []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -596,13 +740,16 @@ _wildfire_pts = None   # cached (lat_array, lon_array)
 
 
 def _load_wildfire_points():
-    """Load & cache the historical fire-hotspot coordinates as numpy arrays."""
+    """Load & cache the historical fire-hotspot coordinates."""
     global _wildfire_pts
     if _wildfire_pts is None:
-        import pandas as pd
-        df = pd.read_csv(WILDFIRE_CSV, usecols=["Lat", "Lon"]).dropna()
-        _wildfire_pts = (df["Lat"].to_numpy(dtype=float),
-                         df["Lon"].to_numpy(dtype=float))
+        points = []
+        for row in _read_csv_rows(WILDFIRE_CSV):
+            try:
+                points.append((float(row["Lat"]), float(row["Lon"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        _wildfire_pts = points
     return _wildfire_pts
 
 
@@ -619,19 +766,12 @@ def assess_wildfire_risk(user_lat: float, user_lon: float) -> dict:
     not a live fire feed.
     """
     try:
-        import numpy as np
-        lat, lon = _load_wildfire_points()
+        points = _load_wildfire_points()
+        dists = [_haversine(user_lat, user_lon, lat, lon) for lat, lon in points]
 
-        R = 6371.0
-        dlat = np.radians(lat - user_lat)
-        dlon = np.radians(lon - user_lon)
-        a = (np.sin(dlat / 2) ** 2 +
-             np.cos(np.radians(user_lat)) * np.cos(np.radians(lat)) * np.sin(dlon / 2) ** 2)
-        dist = R * 2 * np.arcsin(np.sqrt(a))
-
-        count_5 = int((dist <= 5).sum())
-        count_10 = int((dist <= 10).sum())
-        nearest = round(float(dist.min()), 1) if dist.size else None
+        count_5 = sum(1 for dist in dists if dist <= 5)
+        count_10 = sum(1 for dist in dists if dist <= 10)
+        nearest = round(min(dists), 1) if dists else None
 
         if count_10 >= 100:
             level = "HIGH"

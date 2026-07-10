@@ -1,0 +1,41 @@
+tweet_id,text,label_category,label_urgency,label_quantity,label_location
+T001,"URGENT: 30 people trapped near Aut tunnel after landslide, need rescue teams now",Rescue,Critical,30,Aut
+T002,"Families on rooftops in Mandi, water rising fast. SOS please send help",Rescue,Critical,,Mandi
+T003,"Need 25 tents for displaced families at Manali ward 3, houses washed away",Shelter,Medium,25,Manali
+T004,"50 food packets required at Kangra relief camp, people hungry since morning",Food,Medium,50,Kangra
+T005,"Injured tourists at Kullu bus stand need first aid and ambulance immediately",Medical,Critical,,Kullu
+T006,"Drinking water shortage at Solan shelter, need 200 bottles quickly",Water,High,200,Solan
+T007,"Elderly residents in Bilaspur need vehicle support for evacuation before river peaks",Transport,Medium,,Bilaspur
+T008,"3 children with fever at Palampur camp, medicine stock finished, need doctor urgent",Medical,Critical,3,Palampur
+T009,"Cloudburst near Sainj, road blocked, 12 workers stuck at power project site",Rescue,Medium,12,Sainj
+T010,"Require 40 blankets and tarpaulin sheets for homeless families in Chamba",Shelter,Medium,40,Chamba
+T011,"Community kitchen at Dharamshala can't cope, need 100 ration kits ASAP",Food,Critical,100,Dharamshala
+T012,"Water tanker needed at Hamirpur school shelter, taps dry since yesterday",Water,Medium,,Hamirpur
+T013,"Need pickup vehicles to evacuate 20 families from Nurpur low-lying area",Transport,Medium,20,Nurpur
+T014,"Man swept in nala at Bhuntar, search team needed immediately",Rescue,Critical,,Bhuntar
+T015,"Pregnant woman in Keylong needs ambulance, roads partially open, serious condition",Medical,High,,Keylong
+T016,"Shelter overflowing at Nahan, 60 more people arrived, need space and tents",Shelter,Medium,60,Nahan
+T017,"Dry rations for 80 stranded pilgrims at Rampur gurudwara please",Food,Medium,80,Rampur
+T018,"No clean water in Sundernagar colony after flood, kids getting sick",Water,Medium,,Sundernagar
+T019,"Bus needed to move 45 students from Theog school to safer ground",Transport,Medium,45,Theog
+T020,"Trekkers missing near Kasol, last seen before cloudburst, send search and rescue",Rescue,Medium,,Kasol
+T021,"Medical camp at Una out of bandages and ORS, 15 patients waiting",Medical,Medium,15,Una
+T022,"Roof collapsed in Karsog, 5 families need temporary shelter tonight",Shelter,Medium,5,Karsog
+T023,"Hot meals needed for rescue workers at Jogindernagar base, 35 people",Food,Medium,35,Jogindernagar
+T024,"Water purification tablets required at Banjar camp, river water contaminated",Water,Medium,,Banjar
+T025,"Tractor trolleys wanted to shift belongings of flood hit families near Paonta Sahib",Transport,Medium,,Paonta Sahib
+T026,"HELP: landslide buried cattle shed in Sarkaghat, owner trapped, emergency",Rescue,Critical,,Sarkaghat
+T027,"Diabetic patients at Dalhousie shelter without insulin for 2 days, urgent medicine needed",Medical,Critical,,Dalhousie
+T028,"People sleeping in open at Baijnath after quake scare, need 30 tents",Shelter,Medium,30,Baijnath
+T029,"Milk powder and baby food for infants at Kaza relief point",Food,Medium,,Kaza
+T030,"Need 500 water pouches at Nagrota junction for stranded passengers",Water,Medium,500,Nagrota
+T031,"Ambulance stuck, need 4x4 vehicle to reach injured shepherd above Kalpa",Transport,Medium,,Kalpa
+T032,"Boats required, 8 people stranded on river island near Dehra",Rescue,Medium,8,Dehra
+T033,"First aid kits finished at Jibhi volunteer post, minor injuries piling up",Medical,Medium,,Jibhi
+T034,"School gym at Reckong Peo can host 70 but no bedding, please arrange",Shelter,Medium,70,Reckong Peo
+T035,"Langar supplies exhausted at Una relief camp, 150 mouths to feed tonight",Food,Medium,150,Una
+T036,"Handpump broken at Ghumarwin camp, drinking water needed for 90 people",Water,Medium,90,Ghumarwin
+T037,"Volunteers with jeeps needed at Chirgaon to evacuate cutoff hamlet",Transport,Medium,,Chirgaon
+T038,"Two workers stuck on crane at Pandoh dam site, high winds, rescue asap",Rescue,Critical,,Pandoh
+T039,"Oxygen cylinder needed for asthma patient at Kotkhai, condition serious",Medical,High,,Kotkhai
+T040,"Community hall at Arki sheltering 55 people, need mats and blankets soon",Shelter,High,55,Arki
