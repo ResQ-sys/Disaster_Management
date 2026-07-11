@@ -15,6 +15,7 @@ import requests
 
 from resq_project.config import (
     ANTHROPIC_MODEL,
+    GEMINI_MODEL,
     GROK_MODEL,
     LLM_PROVIDER,
     LLM_TEMPERATURE,
@@ -29,12 +30,36 @@ _ollama_model_override: Optional[str] = None
 _openai_model_override: Optional[str] = None
 _anthropic_model_override: Optional[str] = None
 _grok_model_override: Optional[str] = None
+_gemini_model_override: Optional[str] = None
+
+# API keys pasted at runtime via the UI (never persisted to disk). These take
+# precedence over the corresponding environment variable when set.
+_api_key_overrides: dict[str, str] = {}
 
 API_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "grok": "XAI_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
 }
+
+
+def set_api_key(provider: str, key: Optional[str]) -> None:
+    """Store (or clear) a runtime API key pasted in the UI for a provider."""
+    key = (key or "").strip()
+    if key:
+        _api_key_overrides[provider] = key
+    else:
+        _api_key_overrides.pop(provider, None)
+
+
+def active_api_key(provider: str) -> Optional[str]:
+    """The API key to use: pasted UI key first, else the environment variable."""
+    override = _api_key_overrides.get(provider)
+    if override:
+        return override
+    env = API_KEY_ENV.get(provider)
+    return os.environ.get(env) if env else None
 
 
 def set_provider(provider: Optional[str]) -> None:
@@ -82,6 +107,15 @@ def active_grok_model() -> str:
     return _grok_model_override or GROK_MODEL
 
 
+def set_gemini_model(name: Optional[str]) -> None:
+    global _gemini_model_override
+    _gemini_model_override = name or None
+
+
+def active_gemini_model() -> str:
+    return _gemini_model_override or GEMINI_MODEL
+
+
 def active_model_label() -> str:
     provider = active_provider()
     if provider == "ollama":
@@ -92,14 +126,16 @@ def active_model_label() -> str:
         return active_anthropic_model()
     if provider == "grok":
         return active_grok_model()
+    if provider == "gemini":
+        return active_gemini_model()
     return provider
 
 
 def provider_ready(provider: str) -> bool:
     if provider == "ollama":
         return ollama_reachable()
-    env = API_KEY_ENV.get(provider)
-    return bool(env and os.environ.get(env))
+    # Ready if a key was pasted in the UI or is present in the environment.
+    return bool(active_api_key(provider))
 
 
 def ollama_reachable() -> bool:
@@ -140,6 +176,7 @@ def create_chat_model(provider: Optional[str] = None):
         return ChatOpenAI(
             model=active_openai_model(),
             temperature=LLM_TEMPERATURE,
+            api_key=active_api_key("openai"),
         )
 
     if provider == "anthropic":
@@ -148,6 +185,7 @@ def create_chat_model(provider: Optional[str] = None):
         return ChatAnthropic(
             model=active_anthropic_model(),
             temperature=LLM_TEMPERATURE,
+            api_key=active_api_key("anthropic"),
         )
 
     if provider == "grok":
@@ -158,8 +196,17 @@ def create_chat_model(provider: Optional[str] = None):
         return ChatOpenAI(
             model=active_grok_model(),
             temperature=LLM_TEMPERATURE,
-            api_key=os.environ.get("XAI_API_KEY"),
+            api_key=active_api_key("grok"),
             base_url=XAI_BASE_URL,
+        )
+
+    if provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=active_gemini_model(),
+            temperature=LLM_TEMPERATURE,
+            google_api_key=active_api_key("gemini"),
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")

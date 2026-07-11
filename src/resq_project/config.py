@@ -45,13 +45,14 @@ APPROVALS_LOG       = BASE_DIR / "logs" / "approvals.jsonl"                     
 DISPATCH_LEDGER     = BASE_DIR / "logs" / "dispatch_ledger.jsonl"               # approved dispatches → inventory decrements
 
 # ── Runtime Configuration ──────────────────────────────────────────────
-LLM_PROVIDER         = os.getenv("LLM_PROVIDER", "ollama")   # ollama | openai | anthropic | grok
+LLM_PROVIDER         = os.getenv("LLM_PROVIDER", "ollama")   # ollama | openai | anthropic | grok | gemini
 OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL         = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 OPENAI_MODEL         = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 ANTHROPIC_MODEL      = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
 XAI_BASE_URL         = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
 GROK_MODEL           = os.getenv("GROK_MODEL", "grok-4.5")
+GEMINI_MODEL         = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 ORS_API_KEY          = os.getenv("ORS_API_KEY", "")          # openrouteservice.org
 AGENT_COORDINATOR_EMAIL = os.getenv("AGENT_COORDINATOR_EMAIL", "demo.coordinator@example.com")
 

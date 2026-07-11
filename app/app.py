@@ -26,12 +26,15 @@ from resq_project.pdf_report import build_pdf
 from resq_project.llm_client import (
     active_model_label,
     active_grok_model,
+    active_gemini_model,
     active_ollama_model,
     active_provider,
     list_ollama_models,
     ollama_reachable,
     provider_ready,
     set_anthropic_model,
+    set_api_key,
+    set_gemini_model,
     set_grok_model,
     set_ollama_model,
     set_openai_model,
@@ -79,14 +82,17 @@ def render_stat_cards(cards: list[tuple[str, str, str, str]]) -> None:
     left border, so the cards read as part of the same visual language as
     the rest of the app rather than generic boxes.
     """
+    # NOTE: the card HTML is emitted as a single unindented line per card.
+    # Streamlit's markdown renderer treats any line indented 4+ spaces (and the
+    # blank line an empty `sub` would leave) as a fenced code block, which makes
+    # the raw HTML leak into the page — so keep this compact, no newlines.
     cards_html = "".join(
-        f"""
-        <div style='background:white; border-left:4px solid {color}; border-radius:8px;
-                    padding:14px 12px; box-shadow:0 1px 3px rgba(0,0,0,0.08);'>
-          <div style='font-size:12px; color:#64748b; margin-bottom:6px; word-break:break-word;'>{label}</div>
-          <div style='font-size:19px; font-weight:700; color:#1e293b; word-break:break-word;'>{value}</div>
-          {f"<div style='font-size:12px; color:#64748b; margin-top:2px; word-break:break-word;'>{sub}</div>" if sub else ""}
-        </div>"""
+        f"<div style='background:white; border-left:4px solid {color}; border-radius:8px; "
+        f"padding:14px 12px; box-shadow:0 1px 3px rgba(0,0,0,0.08);'>"
+        f"<div style='font-size:12px; color:#64748b; margin-bottom:6px; word-break:break-word;'>{label}</div>"
+        f"<div style='font-size:19px; font-weight:700; color:#1e293b; word-break:break-word;'>{value}</div>"
+        + (f"<div style='font-size:12px; color:#64748b; margin-top:2px; word-break:break-word;'>{sub}</div>" if sub else "")
+        + "</div>"
         for label, value, sub, color in cards
     )
     st.markdown(
@@ -270,8 +276,9 @@ if "agent_stage_history" not in st.session_state:
 _provider_labels = {
     "Ollama (local)": "ollama",
     "OpenAI (API)": "openai",
-    "Anthropic (API)": "anthropic",
+    "Anthropic / Claude (API)": "anthropic",
     "Grok (xAI API)": "grok",
+    "Gemini (Google API)": "gemini",
 }
 if st.session_state.get("llm_provider_choice") in _provider_labels:
     set_provider(_provider_labels[st.session_state["llm_provider_choice"]])
@@ -283,6 +290,13 @@ if st.session_state.get("anthropic_model_choice"):
     set_anthropic_model(st.session_state["anthropic_model_choice"])
 if st.session_state.get("grok_model_choice"):
     set_grok_model(st.session_state["grok_model_choice"])
+if st.session_state.get("gemini_model_choice"):
+    set_gemini_model(st.session_state["gemini_model_choice"])
+# Apply any API keys pasted in the sidebar (kept in session only, never on disk).
+for _prov in ("openai", "anthropic", "grok", "gemini"):
+    _pasted_key = st.session_state.get(f"{_prov}_api_key")
+    if _pasted_key:
+        set_api_key(_prov, _pasted_key)
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_name" not in st.session_state:
@@ -305,7 +319,7 @@ def render_landing_page():
     <div style='background: linear-gradient(135deg, #1e3a5f 0%, #2d6a4f 100%);
                 padding: 36px 40px; border-radius: 16px; margin: 40px auto 24px auto;
                 max-width: 560px; text-align:center;'>
-      <h1 style='color:white; margin:0; font-size:26px;'>{t("🏔️ HP Disaster Relief Agent")}</h1>
+      <h1 style='color:white; margin:0; font-size:26px;'>{t("🏔️ ResQ · Disaster Relief Resource Matching Agent")}</h1>
       <p style='color:#a8d5e2; margin:10px 0 0 0; font-size:14px;'>
         {t("Tell us who you are before we start — this personalizes AI-generated reports "
            "and chat answers, and lets you send coordination emails directly from the app.")}
@@ -353,6 +367,27 @@ def render_landing_page():
 if not st.session_state.logged_in:
     render_landing_page()
     st.stop()
+
+# ══════════════════════════════════════════════════════════════════════
+# VECTOR STORE BOOTSTRAP — build the ChromaDB RAG collections on first run
+# so the app never depends on a manual `python scripts/ingest.py` step.
+# Cached per server process: it does real work only the first time (or after
+# the store is cleared); afterwards it is an instant no-op.
+# ══════════════════════════════════════════════════════════════════════
+@st.cache_resource(show_spinner="🔧 Preparing the disaster knowledge base (first run only — this can take up to a minute)…")
+def _ensure_knowledge_base():
+    from resq_project.bootstrap import ensure_vector_store
+    return ensure_vector_store()
+
+try:
+    _kb_built = _ensure_knowledge_base()
+    if _kb_built:
+        st.toast(t("Knowledge base ready ✓"), icon="✅")
+except Exception as _kb_err:
+    st.warning(t(
+        "Couldn't build the knowledge base automatically — the app will use limited "
+        "fallback data. You can build it manually with `python scripts/ingest.py`. "
+        "Details: {error}", error=_kb_err))
 
 # ── Alert color map ────────────────────────────────────────────────────
 ALERT_COLORS = {
@@ -412,17 +447,27 @@ def geocode_location(district: str, location_desc: str):
 # HEADER — a clean flat-illustration mountain skyline (self-contained SVG,
 # baked-in gradient sky) instead of a plain CSS gradient block.
 # ══════════════════════════════════════════════════════════════════════
+_hero_title = t("ResQ · Disaster Relief Resource Matching Agent")
+_hero_sub = t("Himachal Pradesh multi-hazard coordination: one incident report in, "
+              "one ranked and explainable action plan out.")
+_hero_meta = t("LangGraph · ChromaDB / fallback retrieval · Open-Meteo · OpenRouteService · "
+               "Human approval gate · Active model: {model}", model=active_model_label())
+_hero_chips = [
+    (t("Decision support"), t("Never auto-dispatches outbound action")),
+    (t("Explainable urgency"), t("0–100 score with factor breakdown")),
+    (t("Grounded retrieval"), t("Hospitals, shelters, CWC, GLOF and wildfire context")),
+    (t("Coordination-ready"), t("Approve-before-send draft emails with audit log")),
+]
+_hero_chips_html = "".join(
+    f"<div class='hero-chip'><strong>{_title}</strong><span>{_desc}</span></div>"
+    for _title, _desc in _hero_chips
+)
 st.markdown(f"""
 <div class="hero">
-  <h1>ResQ · Disaster Relief Resource Matching Agent</h1>
-  <p>Himachal Pradesh multi-hazard coordination: one incident report in, one ranked and explainable action plan out.</p>
-  <div class="meta">LangGraph · ChromaDB / fallback retrieval · Open-Meteo · OpenRouteService · Human approval gate · Active model: {active_model_label()}</div>
-  <div class="hero-grid">
-    <div class="hero-chip"><strong>Decision support</strong><span>Never auto-dispatches outbound action</span></div>
-    <div class="hero-chip"><strong>Explainable urgency</strong><span>0–100 score with factor breakdown</span></div>
-    <div class="hero-chip"><strong>Grounded retrieval</strong><span>Hospitals, shelters, CWC, GLOF and wildfire context</span></div>
-    <div class="hero-chip"><strong>Coordination-ready</strong><span>Approve-before-send draft emails with audit log</span></div>
-  </div>
+  <h1>{_hero_title}</h1>
+  <p>{_hero_sub}</p>
+  <div class="meta">{_hero_meta}</div>
+  <div class="hero-grid">{_hero_chips_html}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -523,6 +568,20 @@ with st.expander(t("🤝 Volunteer Need–Resource Matching & Coordination (huma
                                     "(inventory-aware allocation — no double-promising)."))
                 bcol[4].metric(t("Provider verified"),
                                t("Yes") if str(best['resource'].get('contact_status','')).lower()=="verified" else t("No"))
+
+                # Top-2 matches per need: show the runner-up (next-highest score)
+                # so coordinators can see a fallback provider at a glance.
+                runner_up = (m.get("alternatives") or [])
+                if runner_up:
+                    r2 = runner_up[0]
+                    st.caption(t(
+                        "🥈 2nd best match: **{name}** — {score}/100 · coverage {cov}% · {verified}",
+                        name=r2["resource"].get("provider_name", "N/A"),
+                        score=r2.get("score", 0),
+                        cov=r2.get("coverage_pct", 0),
+                        verified=(t("verified") if str(r2["resource"].get("contact_status", "")).lower() == "verified"
+                                  else t("unverified")),
+                    ))
 
             draft = coord.draft_coordination_message(
                 m, coordinator_email=st.session_state.agent_coordinator_email)
@@ -692,21 +751,50 @@ with st.sidebar:
     elif selected_provider == "openai":
         openai_model = st.text_input("OpenAI model", value="gpt-4o-mini", key="openai_model_choice")
         set_openai_model(openai_model)
-        st.caption("Requires `OPENAI_API_KEY` in the environment.")
-        if not provider_ready("openai"):
-            st.warning("OpenAI provider selected but `OPENAI_API_KEY` is not set.")
+        openai_key = st.text_input(
+            "OpenAI API key", type="password", key="openai_api_key",
+            placeholder="sk-...",
+            help="Paste your OpenAI API key. Kept in this session only (never saved to disk); overrides OPENAI_API_KEY.")
+        set_api_key("openai", openai_key)
+        if provider_ready("openai"):
+            st.caption("✅ API key detected (pasted key or `OPENAI_API_KEY`).")
+        else:
+            st.warning("Paste an OpenAI API key above, or set `OPENAI_API_KEY` in the environment.")
     elif selected_provider == "anthropic":
-        anthropic_model = st.text_input("Anthropic model", value="claude-3-5-sonnet-latest", key="anthropic_model_choice")
+        anthropic_model = st.text_input("Anthropic / Claude model", value="claude-3-5-sonnet-latest", key="anthropic_model_choice")
         set_anthropic_model(anthropic_model)
-        st.caption("Requires `ANTHROPIC_API_KEY` in the environment.")
-        if not provider_ready("anthropic"):
-            st.warning("Anthropic provider selected but `ANTHROPIC_API_KEY` is not set.")
-    else:
+        anthropic_key = st.text_input(
+            "Anthropic API key", type="password", key="anthropic_api_key",
+            placeholder="sk-ant-...",
+            help="Paste your Anthropic API key. Kept in this session only (never saved to disk); overrides ANTHROPIC_API_KEY.")
+        set_api_key("anthropic", anthropic_key)
+        if provider_ready("anthropic"):
+            st.caption("✅ API key detected (pasted key or `ANTHROPIC_API_KEY`).")
+        else:
+            st.warning("Paste an Anthropic API key above, or set `ANTHROPIC_API_KEY` in the environment.")
+    elif selected_provider == "grok":
         grok_model = st.text_input("Grok model", value=active_grok_model(), key="grok_model_choice")
         set_grok_model(grok_model)
-        st.caption("Requires `XAI_API_KEY` in the environment. Uses xAI's OpenAI-compatible API without reasoning options enabled.")
+        grok_key = st.text_input(
+            "Grok (xAI) API key", type="password", key="grok_api_key",
+            placeholder="xai-...",
+            help="Paste your xAI API key. Kept in this session only (never saved to disk); overrides XAI_API_KEY.")
+        set_api_key("grok", grok_key)
+        st.caption("Uses xAI's OpenAI-compatible API without reasoning options enabled.")
         if not provider_ready("grok"):
-            st.warning("Grok provider selected but `XAI_API_KEY` is not set.")
+            st.warning("Paste a Grok (xAI) API key above, or set `XAI_API_KEY` in the environment.")
+    else:  # gemini
+        gemini_model = st.text_input("Gemini model", value=active_gemini_model(), key="gemini_model_choice")
+        set_gemini_model(gemini_model)
+        gemini_key = st.text_input(
+            "Gemini (Google) API key", type="password", key="gemini_api_key",
+            placeholder="AIza...",
+            help="Paste your Google AI Studio API key. Kept in this session only (never saved to disk); overrides GOOGLE_API_KEY.")
+        set_api_key("gemini", gemini_key)
+        if provider_ready("gemini"):
+            st.caption("✅ API key detected (pasted key or `GOOGLE_API_KEY`).")
+        else:
+            st.warning("Paste a Gemini (Google) API key above, or set `GOOGLE_API_KEY` in the environment.")
 
     st.markdown("---")
     st.markdown(f"### {t('📋 Situation Details')}")

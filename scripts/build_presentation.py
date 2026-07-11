@@ -1,5 +1,5 @@
 """
-Build the 12-slide capstone presentation for the ResQ HP Disaster Relief Agent.
+Build the 14-slide capstone presentation for the ResQ HP Disaster Relief Agent.
 
 Generates docs/ResQ_Capstone_Presentation.pptx — architecture, LangGraph nodes,
 resource-allocation engine, human-in-the-loop email workflow, and the
@@ -149,7 +149,7 @@ def header(slide, num, title, subtitle=None):
     # footer
     ft = slide.shapes.add_textbox(Inches(0.35), Inches(7.12), Inches(12.6), Inches(0.3))
     set_text(ft, [[("ResQ · HP Disaster Relief Resource Matching Agent", {"size": 9, "color": GRAY}),
-                   (f"   ·   {num} / 12", {"size": 9, "color": GRAY, "bold": True})]],
+                   (f"   ·   {num} / 14", {"size": 9, "color": GRAY, "bold": True})]],
              anchor=MSO_ANCHOR.MIDDLE)
     return slide
 
@@ -561,10 +561,126 @@ notes(s, "This is the heart of 'how resources are allocated based on a request'.
          "arithmetic for allocation.")
 
 # ══════════════════════════════════════════════════════════════════════
-# SLIDE 10 — HUMAN-IN-THE-LOOP EMAIL WORKFLOW
+# SLIDE 10 — MATCHING, WORKED EXAMPLE (one real need, fully scored)
 # ══════════════════════════════════════════════════════════════════════
 s = new_slide()
-header(s, 10, "From Match to Mailbox — the Human-in-the-Loop Email Flow",
+header(s, 10, "Matching, Step by Step — One Need, Fully Scored",
+       "coordination.py · a real request from needs.csv scored against every eligible provider")
+# ── Incoming need strip ────────────────────────────────────────────────
+need_strip = rect(s, Inches(0.35), Inches(1.24), Inches(12.65), Inches(0.86), fill=NAVY)
+set_text(need_strip, [
+    [("Incoming need  N003", {"bold": True, "size": 12.5, "color": ORANGE}),
+     ("     Category ", {"size": 11.5, "color": WHITE}), ("Food", {"bold": True, "size": 11.5, "color": WHITE}),
+     ("      Location ", {"size": 11.5, "color": WHITE}), ("Mandi riverbank", {"bold": True, "size": 11.5, "color": WHITE}),
+     ("      Quantity ", {"size": 11.5, "color": WHITE}), ("60 meal kits", {"bold": True, "size": 11.5, "color": WHITE}),
+     ("      Reported by ", {"size": 11.5, "color": WHITE}), ("NGO field lead", {"bold": True, "size": 11.5, "color": WHITE})],
+    [("Same request can arrive from a tweet — the rule-based extractor pulls category / quantity / location before scoring.",
+      {"size": 10, "color": RGBColor(0xC9, 0xD8, 0xE8), "italic": True})],
+], anchor=MSO_ANCHOR.MIDDLE, space_after=3)
+# ── Scoreboard ─────────────────────────────────────────────────────────
+lbl = s.shapes.add_textbox(Inches(0.35), Inches(2.24), Inches(12.6), Inches(0.3))
+set_text(lbl, [[("Score every eligible provider — category is a hard filter, so only Food providers are scored:",
+                 {"size": 11, "color": GRAY, "italic": True})]], anchor=MSO_ANCHOR.MIDDLE)
+sb_cols = [Inches(0.35), Inches(4.15), Inches(5.55), Inches(7.15), Inches(8.75), Inches(10.55)]
+sb_w    = [Inches(3.70), Inches(1.30), Inches(1.50), Inches(1.50), Inches(1.70), Inches(2.45)]
+def sb_row(y, cells, fill, text_color=INK, bold=False):
+    for i, (cx, cw, val) in enumerate(zip(sb_cols, sb_w, cells)):
+        c = rect(s, cx, y, cw, Inches(0.52), fill=fill, shape=MSO_SHAPE.RECTANGLE)
+        set_text(c, [[(val, {"bold": bold, "size": 10.5, "color": text_color})]],
+                 align=PP_ALIGN.LEFT if i == 0 else PP_ALIGN.CENTER)
+sb_row(Inches(2.60), ["Eligible Food provider", "Category\n40", "Location\n≤25", "Quantity\n≤20", "Avail+Verif\n15", "Score /100"],
+       NAVY, text_color=WHITE, bold=True)
+sb_row(Inches(3.16), ["Red Cross Mandi  (Mandi)", "40", "12.5", "20", "15", "87.5  ✔ BEST"], AMBER, text_color=NAVY, bold=True)
+sb_row(Inches(3.72), ["Annapurna Kitchen  (Shimla)", "40", "0", "20", "15", "75.0"], WHITE)
+sb_row(Inches(4.28), ["Solan Wholesale Foods  (Solan)", "40", "0", "20", "15", "75.0"], CARD)
+# ── Bottom: why it wins + outcome ──────────────────────────────────────
+card(s, Inches(0.35), Inches(5.05), Inches(6.25), Inches(1.85),
+     "Why Red Cross Mandi wins", [
+    [("Category 40", {"bold": True, "size": 10.5, "color": NAVY}),
+     ("  hard filter passed (Food = Food).   ", {"size": 10.5, "color": INK}),
+     ("Location 12.5", {"bold": True, "size": 10.5, "color": SKY}),
+     ("  “Mandi” token overlaps (0.5 Jaccard × 25).", {"size": 10.5, "color": INK})],
+    [("Quantity 20", {"bold": True, "size": 10.5, "color": TEAL}),
+     ("  120 kits ≥ 60 needed → full coverage.   ", {"size": 10.5, "color": INK}),
+     ("Avail 15", {"bold": True, "size": 10.5, "color": ORANGE}),
+     ("  Available (8) + Verified (7).", {"size": 10.5, "color": INK})],
+    "The two Shimla/Solan providers tie at 75.0 — identical except location. Proximity is the whole difference: the same rubric, applied identically, breaks the tie.",
+], accent=AMBER, body_size=10.5)
+card(s, Inches(6.85), Inches(5.05), Inches(6.15), Inches(1.85),
+     "Outcome → an actionable draft", [
+    [("Score 87.5 ≥ 55  →  ", {"bold": True, "size": 11, "color": TEAL}),
+     ("MATCHED", {"bold": True, "size": 11.5, "color": TEAL}),
+     (". Draft outreach for min(60, 120) = 60 kits, coverage 100%.", {"size": 10.5, "color": INK})],
+    "Best match + 2 ranked alternatives are kept, so a coordinator can override the pick with one click.",
+    [("Every number above is reproducible: ", {"italic": True, "size": 10, "color": GRAY}),
+     ("no LLM touches the allocation score — two coordinators always see the same 87.5.",
+      {"italic": True, "size": 10, "color": GRAY})],
+], accent=TEAL, body_size=10.5)
+notes(s, "Walk the scoreboard top row (the rubric) then the three rows. The teaching point: the two "
+         "alternatives are identical to the winner on everything except location — so proximity alone "
+         "decides it. Every value here is real output from coordination.match_needs_to_resources().")
+
+# ══════════════════════════════════════════════════════════════════════
+# SLIDE 11 — INVENTORY-AWARE ALLOCATION (no unit promised twice)
+# ══════════════════════════════════════════════════════════════════════
+s = new_slide()
+header(s, 11, "Inventory-Aware Allocation — No Unit Promised Twice",
+       "coordination.py allocate=True · matching is stateful: process → reserve → re-score against what's left")
+card(s, Inches(0.35), Inches(1.3), Inches(3.75), Inches(5.55),
+     "Why per-need scoring isn't enough", [
+    "Scoring each need independently makes one provider with 100 units look fully available to every need at once.",
+    "In a real dispatch that double-promises scarce stock — two coordinators act on the same 100 units.",
+    [("Fix: ", {"bold": True, "size": 10.5, "color": ORANGE}),
+     ("needs are processed in urgency order, and each best match reserves its units from a working copy of the pool before the next need is scored.",
+      {"size": 10.5, "color": INK})],
+    "So allocation reflects triage priority AND real remaining stock — not file order, not listed capacity.",
+], accent=RED, body_size=10.5)
+# ── Center worked ledger ───────────────────────────────────────────────
+panel = rect(s, Inches(4.30), Inches(1.3), Inches(4.55), Inches(5.55), fill=NAVY)
+set_text(panel, [
+    [("One provider · 100 units · 3 competing needs", {"bold": True, "size": 12.5, "color": ORANGE})],
+    [("Served in urgency order, not file order:", {"size": 10.5, "color": RGBColor(0xC9, 0xD8, 0xE8), "italic": True})],
+    [("", {"size": 4})],
+    [("① CRITICAL · needs 80", {"bold": True, "size": 11.5, "color": WHITE})],
+    [("     reserve 80  →  20 left   ", {"size": 10.5, "color": RGBColor(0xC9, 0xD8, 0xE8)}),
+     ("MATCHED", {"bold": True, "size": 10.5, "color": TEAL})],
+    [("", {"size": 3})],
+    [("② HIGH · needs 50", {"bold": True, "size": 11.5, "color": WHITE})],
+    [("     only 20 left → reserve 20   ", {"size": 10.5, "color": RGBColor(0xC9, 0xD8, 0xE8)}),
+     ("PARTIAL", {"bold": True, "size": 10.5, "color": AMBER})],
+    [("     shortfall −30 → “consider a second provider”", {"size": 9.5, "color": RGBColor(0xC9, 0xD8, 0xE8)})],
+    [("", {"size": 3})],
+    [("③ MEDIUM · needs 15", {"bold": True, "size": 11.5, "color": WHITE})],
+    [("     provider exhausted, skipped   ", {"size": 10.5, "color": RGBColor(0xC9, 0xD8, 0xE8)}),
+     ("UNMATCHED", {"bold": True, "size": 10.5, "color": RED})],
+    [("     → escalation draft to HPSDMA 1077 / NDMA 1078", {"size": 9.5, "color": RGBColor(0xC9, 0xD8, 0xE8)})],
+    [("", {"size": 5})],
+    [("committed_units never exceed what's actually available — total dispatched ≤ 100, always.",
+      {"size": 10, "color": AMBER, "italic": True})],
+], anchor=MSO_ANCHOR.TOP, space_after=4)
+card(s, Inches(9.05), Inches(1.3), Inches(3.95), Inches(5.55),
+     "Dispatch ledger — stock stays spent", [
+    [("Approve & send → ", {"size": 10.5, "color": INK}),
+     ("log_dispatch()", {"bold": True, "size": 10.5, "color": SKY}),
+     (" appends {resource_id, units, request_id} to logs/dispatch_ledger.jsonl.", {"size": 10.5, "color": INK})],
+    [("load_resources()", {"bold": True, "size": 10.5, "color": SKY}),
+     (" subtracts dispatched totals: remaining = listed − dispatched, floored at 0.", {"size": 10.5, "color": INK})],
+    "The UI shows listed / dispatched / remaining per provider, so depletion is visible across sessions.",
+    "Approvals in one incident correctly shrink the pool for the next — later needs degrade to PARTIAL/UNMATCHED on their own.",
+    [("Proven in tests: ", {"bold": True, "size": 10, "color": GRAY, "italic": True}),
+     ("no double-promising, urgency-first order, exhaustion, and stock never goes negative.",
+      {"size": 10, "color": GRAY, "italic": True})],
+], accent=TEAL, body_size=10.5)
+notes(s, "This is the second half of 'how matching is done': not just scoring a pair, but allocating a "
+         "finite pool across competing needs. Walk the center ledger top to bottom — the same 100 units "
+         "produce a MATCHED, a PARTIAL and an UNMATCHED because stock depletes as it's reserved. The "
+         "dispatch ledger makes that depletion persist across runs.")
+
+# ══════════════════════════════════════════════════════════════════════
+# SLIDE 12 — HUMAN-IN-THE-LOOP EMAIL WORKFLOW
+# ══════════════════════════════════════════════════════════════════════
+s = new_slide()
+header(s, 12, "From Match to Mailbox — the Human-in-the-Loop Email Flow",
        "Every coordination message is drafted by the system, decided by a person, and logged forever")
 steps = [
     ("1 · Draft", "draft_coordination_message() — provider, units, coverage %, confidence /100", NAVY),
@@ -603,10 +719,10 @@ notes(s, "Demo beat: click approve on a match, show the real email arriving, the
          "trail captures what the human declined, not just what they sent.")
 
 # ══════════════════════════════════════════════════════════════════════
-# SLIDE 11 — TECH STACK: WHY EACH PIECE
+# SLIDE 13 — TECH STACK: WHY EACH PIECE
 # ══════════════════════════════════════════════════════════════════════
 s = new_slide()
-header(s, 11, "The Stack — Every Choice Has a Reason",
+header(s, 13, "The Stack — Every Choice Has a Reason",
        "Local-first, free-tier, zero mandatory API keys — built to run in a district control room")
 rows = [
     ("LangGraph", "Explicit state machine: typed shared state, conditional edges, natural human-in-the-loop hook — branching CrewAI-style chains can't express."),
@@ -640,10 +756,10 @@ notes(s, "If asked 'why not GPT-4/cloud': disasters knock out connectivity, and 
          "safety-critical logic is deterministic code.")
 
 # ══════════════════════════════════════════════════════════════════════
-# SLIDE 12 — GUARDRAILS, VALIDATION, ROADMAP
+# SLIDE 14 — GUARDRAILS, VALIDATION, ROADMAP
 # ══════════════════════════════════════════════════════════════════════
 s = new_slide()
-header(s, 12, "Trust, Proof & What's Next",
+header(s, 14, "Trust, Proof & What's Next",
        "Guardrails you can measure, results you can reproduce")
 card(s, Inches(0.35), Inches(1.3), Inches(4.15), Inches(4.1),
      "Guardrails", [
