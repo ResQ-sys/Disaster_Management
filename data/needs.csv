@@ -1,6 +1,33 @@
-request_id,reported_by,location,category,quantity,urgency,contact_status,notes
-N001,District volunteer,Kullu bus stand,Medical,12,High,Reached,Injured travelers need first aid and transport
-N002,Local resident,Manali ward 3,Shelter,25,Critical,Pending,Families displaced after flash flood
-N003,NGO field lead,Mandi riverbank,Food,60,Medium,Reached,Ready-to-eat kits needed for one day
-N004,Block officer,Solan bypass,Transport,4,High,Pending,Need vehicle support for elderly evacuation
-N005,Relief camp helper,Kangra school campus,Water,100,High,Reached,Drinking water shortage at temporary shelter
+request_id,reported_at,reported_by,source,location,district,latitude,longitude,category,quantity,quantity_unit,people_affected,vulnerable_groups,access_blocked,contact_status,contact_phone,status,notes
+N001,2026-07-09T06:30:00,District volunteer,field_report,Kullu bus stand,Kullu,31.9587,77.1078,Medical,12,persons,12,injured,no,Reached,+91-9800000101,open,Injured travelers need first aid and transport
+N002,2026-07-09T05:50:00,Local resident,phone_call,Manali ward 3,Kullu,32.2432,77.1892,Shelter,25,persons,25,children;elderly,no,Pending,+91-9800000102,open,Families displaced after flash flood
+N003,2026-07-09T08:15:00,NGO field lead,field_report,Mandi riverbank,Mandi,31.7104,76.9366,Food,60,meal_kits,60,none,no,Reached,+91-9800000103,open,Ready-to-eat kits needed for one day
+N004,2026-07-09T07:40:00,Block officer,phone_call,Solan bypass,Solan,30.9102,77.0899,Transport,4,vehicles,18,elderly,no,Pending,+91-9800000104,open,Need vehicle support for elderly evacuation
+N005,2026-07-09T09:00:00,Relief camp helper,field_report,Kangra school campus,Kangra,32.0921,76.2688,Water,100,water_packs,140,children,no,Reached,+91-9800000105,open,Drinking water shortage at temporary shelter
+N006,2026-07-09T06:05:00,Tourist group member,tweet,Kasol market bridge,Kullu,32.0100,77.3152,Rescue,8,persons,8,injured,yes,Pending,+91-9800000106,open,Group stranded near damaged footbridge after river surge
+N007,2026-07-09T10:20:00,Ward member,phone_call,Manali old town,Kullu,32.2450,77.1780,Water,40,water_packs,55,none,no,Reached,+91-9800000107,open,Piped supply disrupted since morning
+N008,2026-07-09T07:10:00,Hospital assistant,field_report,Mandi civil lines,Mandi,31.7092,76.9290,Medical,20,persons,20,injured;elderly,no,Reached,+91-9800000108,open,Overflow patients need beds and basic trauma care
+N009,2026-07-09T08:45:00,Panchayat head,phone_call,Pandoh market,Mandi,31.6693,77.0587,Shelter,50,persons,50,children,no,Pending,+91-9800000109,open,Low-lying houses evacuated near dam release zone
+N010,2026-07-09T09:30:00,Relief coordinator,field_report,Mandi bypass camp,Mandi,31.7215,76.9205,Food,300,meal_kits,300,children;elderly,no,Reached,+91-9800000110,open,Large camp needs meals for two days - single supplier unlikely to cover full quantity
+N011,2026-07-09T08:05:00,School principal,phone_call,Solan old cantt,Solan,30.9010,77.1030,Transport,5,vehicles,32,children,no,Reached,+91-9800000111,open,Students and staff to be shifted from waterlogged school
+N012,2026-07-09T11:00:00,Community kitchen lead,field_report,Solan mall road,Solan,30.9058,77.0970,Food,45,meal_kits,45,none,no,Reached,+91-9800000112,open,Kitchen supplies exhausted for evening meal
+N013,2026-07-09T07:55:00,ASHA worker,phone_call,Dharamshala Kotwali bazaar,Kangra,32.2185,76.3210,Medical,15,persons,15,children;injured,no,Reached,+91-9800000113,open,Minor injuries and fever cases at relief point
+N014,2026-07-09T10:40:00,Ward volunteer,field_report,Kangra fort road,Kangra,32.0870,76.2620,Shelter,35,persons,35,elderly,no,Pending,+91-9800000114,open,Roadside families need covered shelter before nightfall
+N015,2026-07-09T09:35:00,Camp visitor,tweet,Kangra school campus,Kangra,32.0923,76.2690,Water,90,water_packs,140,children,no,Unverified,+91-9800000115,open,Possible duplicate of N005 - same campus reported by second person
+N016,2026-07-09T08:30:00,Municipal staff,phone_call,Shimla lower bazaar,Shimla,31.1032,77.1720,Food,80,meal_kits,80,none,no,Reached,+91-9800000116,open,Stranded daily-wage workers need cooked food
+N017,2026-07-09T12:10:00,Taxi union rep,phone_call,Shimla ISBT,Shimla,31.0777,77.1580,Transport,2,vehicles,9,none,no,Reached,+91-9800000117,open,Small group relocation to relative homes
+N018,2026-07-09T06:50:00,Gram sevak,field_report,Chamba chowgan,Chamba,32.5540,76.1250,Shelter,40,persons,40,children;elderly,no,Pending,+91-9800000118,open,No local shelter stock - nearest support may be from another district
+N019,2026-07-09T09:15:00,PHC nurse,phone_call,Chamba PHC,Chamba,32.5560,76.1290,Medical,10,persons,10,injured,no,Reached,+91-9800000119,open,Dressing material and basic medicines running short
+N020,2026-07-09T10:00:00,Ward councillor,phone_call,Bilaspur sadar,Bilaspur,31.3330,76.7570,Water,60,water_packs,75,none,no,Reached,+91-9800000120,open,Turbid supply after landslide hit treatment unit
+N021,2026-07-09T05:30:00,Trekking guide,tweet,Keylong helipad road,Lahaul and Spiti,32.5720,77.0330,Rescue,12,persons,12,injured;elderly,yes,Pending,+91-9800000121,open,Road cut off by landslide - group needs evacuation possibly by air
+N022,2026-07-09T11:30:00,Camp manager,field_report,Kullu Dhalpur ground,Kullu,31.9560,77.1110,Sanitation,20,portable_toilets,400,none,no,Reached,+91-9800000122,open,No sanitation resource category available - likely needs human escalation
+N023,2026-07-09T13:00:00,Hotel manager,phone_call,Manali circuit house road,Kullu,32.2410,77.1850,Medical,6,persons,6,none,no,Reached,+91-9800000123,open,Guests with minor injuries after wall collapse
+N024,2026-07-09T12:30:00,Relief camp lead,field_report,Mandi Paddal ground,Mandi,31.7160,76.9250,Water,150,water_packs,200,children,no,Reached,+91-9800000124,open,Camp population increased overnight
+N025,2026-07-09T14:00:00,Block officer,phone_call,Solan Rabon village,Solan,30.9350,77.1210,Shelter,20,persons,20,none,no,Pending,+91-9800000125,open,Roof damage in cluster of houses
+N026,2026-07-09T07:20:00,Anganwadi worker,field_report,Kangra Nagrota bazaar,Kangra,32.0560,76.3880,Food,70,meal_kits,70,children,no,Reached,+91-9800000126,matched,Matched to nearby NGO kitchen - awaiting dispatch confirmation
+N027,2026-07-09T15:20:00,Resident welfare assoc,phone_call,Shimla Sanjauli,Shimla,31.1090,77.1990,Medical,9,persons,9,elderly,no,Reached,+91-9800000127,open,Elderly residents need medicines and checkup
+N028,2026-07-09T13:40:00,Panchayat member,phone_call,Bilaspur Ghumarwin,Bilaspur,31.4420,76.7130,Food,40,meal_kits,40,none,no,Pending,+91-9800000128,open,Ration shop inaccessible due to blocked road
+N029,2026-07-09T14:30:00,NGO volunteer,field_report,Chamba Sultanpur,Chamba,32.5490,76.1180,Food,55,meal_kits,55,children,no,Reached,+91-9800000129,open,No local food stock - cross-district supply expected
+N030,2026-07-08T18:00:00,Ward member,phone_call,Kullu Akhara bazaar,Kullu,31.9600,77.1090,Food,30,meal_kits,30,none,no,Reached,+91-9800000130,fulfilled,Served by local gurudwara langar on day one
+N031,2026-07-09T16:00:00,Jal board operator,phone_call,Hamirpur gandhi chowk,Hamirpur,31.6860,76.5210,Water,80,water_packs,95,none,no,Reached,+91-9800000131,open,Pump house flooded - no water resource in this district
+N032,2026-07-09T15:45:00,SDM office staff,phone_call,Una MC office,Una,31.4690,76.2710,Transport,3,vehicles,14,elderly,no,Pending,+91-9800000132,open,No transport resource in Una - nearest support from adjoining district

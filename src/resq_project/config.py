@@ -40,10 +40,19 @@ GLACIAL_LAKES_CSV   = resolve_data_file("hp_glacial_lakes.csv")   # CWC GLOF mon
 WILDFIRE_CSV        = resolve_data_file("Past_Data_For_Wildfire_detection_HP.csv")  # VIIRS fire hotspots
 NEEDS_CSV           = resolve_data_file("needs.csv", prefer_primary=True)       # volunteer/relief needs
 RESOURCES_CSV       = resolve_data_file("resources.csv", prefer_primary=True)   # volunteer/relief resources
+TWEETS_CSV          = resolve_data_file("disaster_tweets_sample.csv", prefer_primary=True)  # labelled tweet feed (Kaggle Disaster Tweets style)
 APPROVALS_LOG       = BASE_DIR / "logs" / "approvals.jsonl"                     # human-in-loop audit log
+DISPATCH_LEDGER     = BASE_DIR / "logs" / "dispatch_ledger.jsonl"               # approved dispatches → inventory decrements
 
 # ── Runtime Configuration ──────────────────────────────────────────────
+LLM_PROVIDER         = os.getenv("LLM_PROVIDER", "ollama")   # ollama | openai | anthropic | grok | gemini
 OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL         = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+OPENAI_MODEL         = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+ANTHROPIC_MODEL      = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+XAI_BASE_URL         = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
+GROK_MODEL           = os.getenv("GROK_MODEL", "grok-4.5")
+GEMINI_MODEL         = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 ORS_API_KEY          = os.getenv("ORS_API_KEY", "")          # openrouteservice.org
 AGENT_COORDINATOR_EMAIL = os.getenv("AGENT_COORDINATOR_EMAIL", "demo.coordinator@example.com")
 
@@ -60,7 +69,6 @@ COLLECTION_KNOWLEDGE  = "hp_disaster_knowledge"   # landslide PDF + NDMA guideli
 COLLECTION_GLACIAL    = "hp_glacial_lakes"        # CWC GLOF monitoring (Sep 2025)
 
 # ── LangGraph LLM ─────────────────────────────────────────────────────
-LLM_MODEL       = "llama3.2:1b"
 LLM_TEMPERATURE = 0.1
 
 # ── HP Districts & Risk Tiers (from HIMCOSTE 2023 Landslide Inventory) ─

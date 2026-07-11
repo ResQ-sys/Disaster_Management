@@ -1,0 +1,6 @@
+request_id,reported_by,location,category,quantity,urgency,contact_status,notes
+N001,District volunteer,Kullu bus stand,Medical,12,High,Reached,Injured travelers need first aid and transport
+N002,Local resident,Manali ward 3,Shelter,25,Critical,Pending,Families displaced after flash flood
+N003,NGO field lead,Mandi riverbank,Food,60,Medium,Reached,Ready-to-eat kits needed for one day
+N004,Block officer,Solan bypass,Transport,4,High,Pending,Need vehicle support for elderly evacuation
+N005,Relief camp helper,Kangra school campus,Water,100,High,Reached,Drinking water shortage at temporary shelter

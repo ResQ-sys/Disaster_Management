@@ -136,6 +136,28 @@ HI: dict[str, str] = {
         "संचालित: LangGraph • Ollama llama3.2:1b • ChromaDB • Open-Meteo • "
         "स्रोत: HIMCOSTE 2023 | CWC | NHP अस्पताल | DAY-NULM | HP शिक्षा विभाग",
 
+    # Main hero header (ResQ)
+    "ResQ · Disaster Relief Resource Matching Agent":
+        "ResQ · आपदा राहत संसाधन मिलान एजेंट",
+    "Himachal Pradesh multi-hazard coordination: one incident report in, "
+    "one ranked and explainable action plan out.":
+        "हिमाचल प्रदेश बहु-खतरा समन्वय: एक घटना रिपोर्ट दें, और एक क्रमबद्ध व व्याख्या-योग्य "
+        "कार्य योजना पाएं।",
+    "LangGraph · ChromaDB / fallback retrieval · Open-Meteo · OpenRouteService · "
+    "Human approval gate · Active model: {model}":
+        "LangGraph · ChromaDB / फॉलबैक पुनर्प्राप्ति · Open-Meteo · OpenRouteService · "
+        "मानव स्वीकृति द्वार · सक्रिय मॉडल: {model}",
+    "Decision support": "निर्णय समर्थन",
+    "Never auto-dispatches outbound action": "कभी भी स्वतः बाहरी कार्रवाई नहीं भेजता",
+    "Explainable urgency": "व्याख्या-योग्य तात्कालिकता",
+    "0–100 score with factor breakdown": "0–100 स्कोर, कारक विवरण सहित",
+    "Grounded retrieval": "आधारित पुनर्प्राप्ति",
+    "Hospitals, shelters, CWC, GLOF and wildfire context":
+        "अस्पताल, आश्रय, CWC, GLOF और जंगल की आग संदर्भ",
+    "Coordination-ready": "समन्वय हेतु तैयार",
+    "Approve-before-send draft emails with audit log":
+        "भेजने से पहले स्वीकृति वाले ड्राफ्ट ईमेल, लेखा-लॉग सहित",
+
     # HP Disaster Assistant expander
     "💬 HP Disaster Assistant": "💬 HP आपदा सहायक",
     "One chatbot for two jobs: grounded Q&A over ingested HP disaster data "

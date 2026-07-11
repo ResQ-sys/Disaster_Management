@@ -12,16 +12,16 @@ routing decisions are transparent and reproducible.
 """
 
 import json
+import csv
 import re
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 
-import pandas as pd
-
 from resq_project.config import (
     APPROVALS_LOG,
+    DISPATCH_LEDGER,
     NEEDS_CSV,
     RESOURCES_CSV,
 )
@@ -37,13 +37,70 @@ CATEGORIES = ["Medical", "Shelter", "Food", "Water", "Transport", "Rescue"]
 def load_needs() -> list[dict]:
     if not Path(NEEDS_CSV).exists():
         return []
-    return pd.read_csv(NEEDS_CSV).fillna("").to_dict("records")
+    with open(NEEDS_CSV, newline="", encoding="utf-8-sig") as f:
+        return [{k: (v if v is not None else "") for k, v in row.items()} for row in csv.DictReader(f)]
 
 
-def load_resources() -> list[dict]:
+def load_resources(apply_ledger: bool = True) -> list[dict]:
+    """Load the resource pool; by default apply the dispatch ledger so
+    `quantity` reflects what is actually still available (never below 0)."""
     if not Path(RESOURCES_CSV).exists():
         return []
-    return pd.read_csv(RESOURCES_CSV).fillna("").to_dict("records")
+    with open(RESOURCES_CSV, newline="", encoding="utf-8-sig") as f:
+        resources = [{k: (v if v is not None else "") for k, v in row.items()}
+                     for row in csv.DictReader(f)]
+
+    dispatched = dispatched_totals() if apply_ledger else {}
+    for res in resources:
+        try:
+            original = int(float(res.get("quantity", 0) or 0))
+        except (TypeError, ValueError):
+            original = 0
+        used = int(dispatched.get(str(res.get("resource_id", "")), 0))
+        res["quantity_original"] = original
+        res["dispatched_units"] = used
+        res["quantity"] = max(0, original - used)
+    return resources
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Dispatch ledger — approved sends consume provider stock
+# ══════════════════════════════════════════════════════════════════════
+def log_dispatch(record: dict) -> None:
+    """Record an approved dispatch (resource_id, provider, units, request_id)
+    so the provider's remaining stock reflects what has been committed."""
+    DISPATCH_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    record = {**record, "timestamp": datetime.now(timezone.utc).isoformat()}
+    with open(DISPATCH_LEDGER, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def dispatched_totals() -> dict:
+    """Total units committed per resource_id across the ledger."""
+    if not DISPATCH_LEDGER.exists():
+        return {}
+    totals: dict = {}
+    with open(DISPATCH_LEDGER) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            rid = str(rec.get("resource_id", ""))
+            try:
+                units = int(float(rec.get("units", 0) or 0))
+            except (TypeError, ValueError):
+                units = 0
+            if rid:
+                totals[rid] = totals.get(rid, 0) + units
+    return totals
+
+
+def read_dispatches(limit: int = 50) -> list[dict]:
+    if not DISPATCH_LEDGER.exists():
+        return []
+    with open(DISPATCH_LEDGER) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    return rows[-limit:]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -106,22 +163,58 @@ def score_match(need: dict, resource: dict) -> dict:
     }
 
 
-def match_needs_to_resources(needs=None, resources=None) -> list[dict]:
-    """For every need, rank eligible resources and attach the best match."""
+def match_needs_to_resources(needs=None, resources=None, allocate: bool = False) -> list[dict]:
+    """For every need, rank eligible resources and attach the best match.
+
+    With allocate=True the matcher becomes inventory-aware: needs are
+    processed in urgency order and each best match *reserves* its units from
+    a working copy of the pool, so one provider's stock is never promised to
+    two needs at once. Each best match then carries `committed_units`.
+    """
     needs = needs if needs is not None else load_needs()
     resources = resources if resources is not None else load_resources()
 
+    # Working copies so allocation never mutates the caller's resource dicts.
+    pool = [dict(res) for res in resources]
+
+    if allocate:
+        needs = sorted(needs, key=lambda n: -URGENCY_RANK.get(
+            str(n.get("urgency", "")).upper(), 0))
+
     results = []
     for need in needs:
+        try:
+            need_qty = int(float(need.get("quantity", 0) or 0))
+        except (TypeError, ValueError):
+            need_qty = 0
+
         scored = []
-        for res in resources:
+        for res in pool:
+            try:
+                remaining = int(float(res.get("quantity", 0) or 0))
+            except (TypeError, ValueError):
+                remaining = 0
+            # Exhausted providers can't serve a quantified need anymore.
+            if allocate and need_qty > 0 and remaining <= 0:
+                continue
             s = score_match(need, res)
             if s.get("eligible"):
-                scored.append({"resource": res, **s})
+                # Snapshot: the draft shows availability as of *this* match,
+                # even after later needs decrement the working pool.
+                scored.append({"resource": dict(res), "_pool_res": res, **s})
         scored.sort(key=lambda x: (x["score"], URGENCY_RANK.get(
             str(x["resource"].get("urgency_capacity", "")).upper(), 0)), reverse=True)
 
         best = scored[0] if scored else None
+        if best and allocate:
+            pool_res = best["_pool_res"]
+            available = int(float(pool_res.get("quantity", 0) or 0))
+            committed = min(need_qty, available) if need_qty > 0 else 0
+            best["committed_units"] = committed
+            pool_res["quantity"] = available - committed
+        for entry in scored:
+            entry.pop("_pool_res", None)
+
         results.append({
             "need": need,
             "best_match": best,
@@ -216,6 +309,7 @@ def draft_coordination_message(match: dict, coordinator_email: str = "") -> str:
         return (
             f"{header}\n\n"
             f"TO: {coordinator_email}\n"
+            f"SUBJECT: Approval required to escalate need #{need.get('request_id')}\n\n"
             f"CC: District Control Room\n\n"
             f"Need #{need.get('request_id')}: {need.get('quantity')} unit(s) of "
             f"{need.get('category')} at {need.get('location')} "
@@ -223,7 +317,7 @@ def draft_coordination_message(match: dict, coordinator_email: str = "") -> str:
             f"Notes: {need.get('notes')}\n\n"
             f"⚠ NO matching resource found in the available pool. "
             f"Escalate to district control room (HPSDMA 1077 / NDMA 1078) for external support.\n\n"
-            f"— Action for human coordinator: verify need, then escalate."
+            f"— Action for human coordinator: verify need, approve escalation, then escalate."
         )
 
     res = best["resource"]

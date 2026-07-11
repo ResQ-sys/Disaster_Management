@@ -1,9 +1,23 @@
-resource_id,provider_name,location,category,quantity,urgency_capacity,contact_status,availability,notes
-R001,Zonal Hospital Kullu,Kullu,Medical,40,Critical,Verified,Available,Emergency beds and trauma support
-R002,Govt Senior Secondary School Manali,Manali,Shelter,80,High,Pending,Can be activated as temporary shelter
-R003,Red Cross Mandi,Mandi,Food,120,Medium,Verified,Available,Dry ration and ready meals
-R004,District Transport Cell Solan,Solan,Transport,6,High,Verified,Available,Mini vehicles for evacuation
-R005,Jal Shakti Support Unit Kangra,Kangra,Water,250,High,Verified,Available,Packaged water and tankers
-R006,Himalayan Volunteer Network,Kullu,Rescue,18,High,Verified,Available,Local trained volunteers available for evacuation and field support
-R007,SEEDS NGO Relief Team,Mandi,Shelter,60,High,Verified,Available,NGO-managed temporary shelter kits and tarpaulins
-R008,Youth Volunteer Collective Solan,Solan,Transport,3,Medium,Pending,Available,Volunteer drivers with small vehicles for local transport
+resource_id,provider_name,provider_type,location,district,latitude,longitude,category,quantity,quantity_unit,contact_status,contact_phone,availability,last_updated,status,notes
+R001,Zonal Hospital Kullu,government,Kullu,Kullu,31.9605,77.1055,Medical,40,beds,Verified,+91-9810000201,Available,2026-07-09T06:00:00,active,Emergency beds and trauma support
+R002,Govt Senior Secondary School Manali,government,Manali,Kullu,32.2402,77.1870,Shelter,80,persons,Pending,+91-9810000202,Standby,2026-07-09T05:30:00,active,Can be activated as temporary shelter
+R003,Red Cross Mandi,ngo,Mandi,Mandi,31.7095,76.9330,Food,120,meal_kits,Verified,+91-9810000203,Available,2026-07-09T08:00:00,active,Dry ration and ready meals
+R004,District Transport Cell Solan,government,Solan,Solan,30.9060,77.0950,Transport,6,vehicles,Verified,+91-9810000204,Available,2026-07-09T07:00:00,active,Mini vehicles for evacuation
+R005,Jal Shakti Support Unit Kangra,government,Kangra,Kangra,32.0940,76.2700,Water,250,water_packs,Verified,+91-9810000205,Available,2026-07-09T08:30:00,active,Packaged water and tankers
+R006,Himalayan Volunteer Network,volunteer,Kullu,Kullu,31.9570,77.1100,Rescue,18,volunteers,Verified,+91-9810000206,Available,2026-07-09T06:15:00,active,Local trained volunteers available for evacuation and field support
+R007,SEEDS NGO Relief Team,ngo,Mandi,Mandi,31.7120,76.9310,Shelter,60,shelter_kits,Verified,+91-9810000207,Available,2026-07-09T07:45:00,active,NGO-managed temporary shelter kits and tarpaulins
+R008,Youth Volunteer Collective Solan,volunteer,Solan,Solan,30.9040,77.0985,Transport,3,vehicles,Pending,+91-9810000208,Available,2026-07-09T07:30:00,active,Volunteer drivers with small vehicles for local transport
+R009,Annapurna Community Kitchen Shimla,ngo,Shimla,Shimla,31.1040,77.1745,Food,200,meal_kits,Verified,+91-9810000209,Available,2026-07-09T08:15:00,active,Large-capacity cooked meal and dry kit supplier
+R010,IGMC Shimla,government,Shimla,Shimla,31.1055,77.1790,Medical,60,beds,Verified,+91-9810000210,Available,2026-07-09T06:30:00,active,Tertiary care with ambulance support
+R011,Zonal Hospital Dharamshala,government,Dharamshala,Kangra,32.2160,76.3200,Medical,30,beds,Verified,+91-9810000211,Available,2026-07-09T07:15:00,active,Emergency ward and mobile medical unit
+R012,Tibetan Relief Committee Dharamshala,ngo,Dharamshala,Kangra,32.2200,76.3250,Shelter,45,persons,Verified,+91-9810000212,Available,2026-07-09T09:00:00,active,Community hall and bedding stock
+R013,Mandi Water Tanker Unit,government,Mandi,Mandi,31.7075,76.9280,Water,180,water_packs,Verified,+91-9810000213,Available,2026-07-09T08:45:00,active,Tankers plus packaged water
+R014,Bilaspur Jal Shakti Division,government,Bilaspur,Bilaspur,31.3340,76.7550,Water,100,water_packs,Verified,+91-9810000214,Available,2026-07-09T09:30:00,active,Packaged water stock at division store
+R015,Chamba Civil Dispensary,government,Chamba,Chamba,32.5550,76.1270,Medical,12,beds,Pending,+91-9810000215,Standby,2026-07-09T07:00:00,active,Limited beds - contact confirmation awaited
+R016,SDRF Rescue Team Mandi,government,Mandi,Mandi,31.7130,76.9340,Rescue,25,personnel,Verified,+91-9810000216,Available,2026-07-09T05:45:00,active,Trained swift-water and landslide rescue team
+R017,Manali Water Supply Cell,government,Manali,Kullu,32.2420,77.1860,Water,90,water_packs,Verified,+91-9810000217,Available,2026-07-09T10:00:00,active,Packaged water for disrupted wards
+R018,Solan Wholesale Food Suppliers,private,Solan,Solan,30.9075,77.0940,Food,100,meal_kits,Verified,+91-9810000218,Available,2026-07-09T10:30:00,active,Dry ration kits from wholesale stock
+R019,Kullu Grain Depot,government,Kullu,Kullu,31.9550,77.1120,Food,0,meal_kits,Verified,+91-9810000219,Depleted,2026-07-09T11:00:00,inactive,Stock exhausted on day one - restock awaited
+R020,Private Donor Fleet Kangra,private,Kangra,Kangra,32.0900,76.2650,Transport,4,vehicles,Unverified,+91-9810000220,Available,2026-07-09T12:00:00,active,Offer received via social media - identity not yet verified
+R021,HRTC Emergency Fleet Shimla,government,Shimla,Shimla,31.0790,77.1590,Transport,5,vehicles,Verified,+91-9810000221,Available,2026-07-09T09:15:00,active,Buses and utility vehicles on standby
+R022,State Helibase Bhuntar,government,Bhuntar,Kullu,31.8760,77.1540,Rescue,1,helicopter,Verified,+91-9810000222,Available,2026-07-09T06:45:00,active,Air evacuation for road-cut areas - weather dependent
